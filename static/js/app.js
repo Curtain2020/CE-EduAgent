@@ -31,6 +31,7 @@ async function initStudent() {
         if (data.success) {
             isInitialized = true;
             updateStatus(`虚拟学生 ${data.student_name} 初始化成功！`, 'success');
+            updateSpeechButtons();
             
             // 更新UI
             document.getElementById('initBtn').style.display = 'none';
@@ -81,6 +82,10 @@ async function resetStudent() {
         } else {
             updateStatus('重置失败: ' + (data.error || '未知错误'), 'error');
         }
+        
+        stopSpeechRecording(true);
+        updateSpeechButtons();
+        updateSpeechStatus('语音识别未启动');
         
         // 重置UI
         document.getElementById('initBtn').style.display = 'inline-block';
@@ -301,10 +306,222 @@ document.getElementById('messageInput').addEventListener('keypress', function(e)
     }
 });
 
-// 定期更新上下文（每5秒）
+// 更新上下文（每5秒）
 setInterval(() => {
     if (isInitialized) {
         updateContext();
     }
 }, 5000);
 
+let speechRecorderStream = null;
+let speechRecorderContext = null;
+let speechRecorderProcessor = null;
+let speechRecorderChunks = [];
+let speechRecorderStarted = false;
+const SPEECH_TARGET_SAMPLE_RATE = 16000;
+
+function updateSpeechStatus(message, type = 'info') {
+    const statusEl = document.getElementById('speechStatus');
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = `speech-status ${type}`;
+}
+
+function updateSpeechButtons() {
+    const startBtn = document.getElementById('speechStartBtn');
+    const stopBtn = document.getElementById('speechStopBtn');
+    if (!startBtn || !stopBtn) return;
+    if (!isInitialized) {
+        startBtn.disabled = true;
+        stopBtn.disabled = true;
+        return;
+    }
+    startBtn.disabled = speechRecorderStarted;
+    stopBtn.disabled = !speechRecorderStarted;
+}
+
+async function startSpeechRecording() {
+    if (speechRecorderStarted) {
+        updateSpeechStatus('录音已经在进行中', 'running');
+        return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        updateSpeechStatus('当前浏览器不支持麦克风访问', 'error');
+        return;
+    }
+    updateSpeechStatus('正在请求麦克风权限…', 'info');
+    speechRecorderChunks = [];
+    try {
+        speechRecorderStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        speechRecorderContext = new AudioContextClass();
+        const source = speechRecorderContext.createMediaStreamSource(speechRecorderStream);
+        speechRecorderProcessor = speechRecorderContext.createScriptProcessor(4096, 1, 1);
+        source.connect(speechRecorderProcessor);
+        speechRecorderProcessor.connect(speechRecorderContext.destination);
+        speechRecorderProcessor.onaudioprocess = (event) => {
+            const inputBuffer = event.inputBuffer.getChannelData(0);
+            const downsampled = downsampleBuffer(inputBuffer, speechRecorderContext.sampleRate, SPEECH_TARGET_SAMPLE_RATE);
+            if (!downsampled) return;
+            const pcm = floatTo16BitPCM(downsampled);
+            if (pcm) speechRecorderChunks.push(pcm);
+        };
+        speechRecorderStarted = true;
+        updateSpeechButtons();
+        updateSpeechStatus('录音中…点击停止结束录音并开始识别', 'running');
+    } catch (error) {
+        console.error('启动录音失败:', error);
+        updateSpeechStatus(`录音启动失败：${error.message}`, 'error');
+        stopSpeechRecording(true);
+    }
+}
+
+async function stopSpeechRecording(isAuto = false) {
+    if (!speechRecorderStarted) {
+        cleanupSpeechRecorder();
+        updateSpeechButtons();
+        if (!isAuto) updateSpeechStatus('未检测到录音', 'info');
+        return;
+    }
+    cleanupSpeechRecorder();
+    updateSpeechButtons();
+
+    if (!speechRecorderChunks.length) {
+        updateSpeechStatus('录音内容为空', 'error');
+        return;
+    }
+
+    updateSpeechStatus('正在生成音频文件并提交识别…', 'running');
+    const wavBlob = buildWavBlob(speechRecorderChunks, SPEECH_TARGET_SAMPLE_RATE);
+    speechRecorderChunks = [];
+
+    try {
+        const formData = new FormData();
+        formData.append('audio', wavBlob, `record_${Date.now()}.wav`);
+        const response = await fetch('/api/speech/transcribe', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || '识别失败');
+        }
+        const autoSend = document.getElementById('speechAutoSend')?.checked;
+        const transcript = data.transcript || '';
+        if (autoSend && transcript) {
+            const inputEl = document.getElementById('messageInput');
+            if (inputEl) {
+                const needsBreak = inputEl.value && !inputEl.value.endsWith('\n');
+                inputEl.value = `${inputEl.value}${needsBreak ? '\n' : ''}${transcript}`;
+            }
+        }
+        updateSpeechStatus(transcript ? `识别完成：${transcript}` : '识别完成，未返回文本', transcript ? 'running' : 'info');
+    } catch (error) {
+        console.error('上传或识别失败:', error);
+        updateSpeechStatus(`语音识别失败：${error.message}`, 'error');
+    }
+}
+
+function cleanupSpeechRecorder() {
+    if (speechRecorderProcessor) {
+        speechRecorderProcessor.disconnect();
+        speechRecorderProcessor.onaudioprocess = null;
+        speechRecorderProcessor = null;
+    }
+    if (speechRecorderContext) {
+        speechRecorderContext.close().catch(() => {});
+        speechRecorderContext = null;
+    }
+    if (speechRecorderStream) {
+        speechRecorderStream.getTracks().forEach((track) => track.stop());
+        speechRecorderStream = null;
+    }
+    speechRecorderStarted = false;
+}
+
+function downsampleBuffer(buffer, inputSampleRate, outputSampleRate) {
+    if (outputSampleRate >= inputSampleRate) {
+        return buffer;
+    }
+    const ratio = inputSampleRate / outputSampleRate;
+    const newLength = Math.round(buffer.length / ratio);
+    const result = new Float32Array(newLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+        const nextOffset = Math.round((offsetResult + 1) * ratio);
+        let accum = 0;
+        let count = 0;
+        for (let i = offsetBuffer; i < nextOffset && i < buffer.length; i++) {
+            accum += buffer[i];
+            count++;
+        }
+        result[offsetResult] = count ? accum / count : 0;
+        offsetResult++;
+        offsetBuffer = nextOffset;
+    }
+    return result;
+}
+
+function floatTo16BitPCM(floatBuffer) {
+    if (!floatBuffer) return null;
+    const result = new Int16Array(floatBuffer.length);
+    for (let i = 0; i < floatBuffer.length; i++) {
+        let s = Math.max(-1, Math.min(1, floatBuffer[i]));
+        result[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return result;
+}
+
+function buildWavBlob(int16Chunks, sampleRate) {
+    const totalLength = int16Chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const buffer = new ArrayBuffer(44 + totalLength * 2);
+    const view = new DataView(buffer);
+
+    function writeString(offset, str) {
+        for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+        }
+    }
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + totalLength * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, totalLength * 2, true);
+
+    let offset = 44;
+    for (const chunk of int16Chunks) {
+        for (let i = 0; i < chunk.length; i++, offset += 2) {
+            view.setInt16(offset, chunk[i], true);
+        }
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function initialiseSpeechControls() {
+    const startBtn = document.getElementById('speechStartBtn');
+    const stopBtn = document.getElementById('speechStopBtn');
+    if (!startBtn || !stopBtn) return;
+    startBtn.addEventListener('click', () => startSpeechRecording());
+    stopBtn.addEventListener('click', () => stopSpeechRecording(false));
+    updateSpeechButtons();
+    updateSpeechStatus('语音识别未启动');
+}
+
+window.addEventListener('beforeunload', () => stopSpeechRecording(true));
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initialiseSpeechControls);
+} else {
+    initialiseSpeechControls();
+}

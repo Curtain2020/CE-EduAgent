@@ -273,6 +273,62 @@ body {
     cursor: not-allowed;
 }
 
+.speech-controls {
+    padding: 15px 20px 0;
+    background: white;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.speech-controls button {
+    padding: 8px 16px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 16px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.3s;
+}
+
+.speech-controls button:hover:not(:disabled) {
+    background: #5568d3;
+}
+
+.speech-controls button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+.speech-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #555;
+}
+
+.speech-status {
+    font-size: 12px;
+    color: #666;
+    padding: 4px 8px;
+    background: #f4f4f8;
+    border-radius: 12px;
+}
+
+.speech-status.running {
+    color: #1e8449;
+    background: #e9f7ef;
+}
+
+.speech-status.error {
+    color: #c0392b;
+    background: #fdecea;
+}
+
 .context-panel {
     width: 350px;
     background: white;

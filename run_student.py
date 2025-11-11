@@ -5,12 +5,16 @@ Flask Web应用 - 虚拟学生对话系统
 
 import json
 import asyncio
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_cors import CORS
 import sys
 import os
 import traceback
 import threading
+from datetime import datetime
+from pathlib import Path
+from werkzeug.utils import secure_filename
+import shutil
 
 # 添加src目录到路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -18,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.student.virtual_student import VirtualStudent
 from src.api.qwen_client import QwenAPIClient
 from src.config.settings import console
+from src.services.funasr_ws import transcribe_audio, parse_chunk_sizes, FunASRClientError, TranscriptionResult
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import ToolMessage
@@ -27,6 +32,35 @@ CORS(app)
 
 # 全局虚拟学生实例
 current_student: VirtualStudent = None
+
+# 语音识别配置
+FUNASR_HOST = os.environ.get("FUNASR_HOST", "59.78.189.185")
+FUNASR_PORT = int(os.environ.get("FUNASR_PORT", "9999"))
+FUNASR_MODE = os.environ.get("FUNASR_MODE", "2pass")
+FUNASR_CHUNK_SIZE = parse_chunk_sizes(os.environ.get("FUNASR_CHUNK_SIZE", "2,8,3"))
+FUNASR_CHUNK_INTERVAL = int(os.environ.get("FUNASR_CHUNK_INTERVAL", "8"))
+FUNASR_USE_ITN = bool(int(os.environ.get("FUNASR_USE_ITN", "1")))
+FUNASR_USE_SSL = bool(int(os.environ.get("FUNASR_USE_SSL", "0")))
+FUNASR_SSL_VERIFY = bool(int(os.environ.get("FUNASR_SSL_VERIFY", "0")))
+FUNASR_HOTWORD = os.environ.get("FUNASR_HOTWORD")
+FUNASR_SEND_WITHOUT_SLEEP = bool(int(os.environ.get("FUNASR_SEND_WITHOUT_SLEEP", "1")))
+
+UPLOAD_ROOT = Path(os.environ.get("AUDIO_UPLOAD_DIR", Path(__file__).parent / "uploads"))
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def clear_uploads_directory():
+    """清空上传目录中的语音文件。"""
+    if not UPLOAD_ROOT.exists():
+        return
+    for entry in UPLOAD_ROOT.iterdir():
+        try:
+            if entry.is_file():
+                entry.unlink()
+            elif entry.is_dir():
+                shutil.rmtree(entry)
+        except Exception as exc:
+            console.print(f"[yellow]清理上传文件失败: {exc}[/yellow]")
 
 # 全局事件循环（每个线程一个）
 def get_or_create_event_loop():
@@ -435,6 +469,78 @@ def get_context():
         }), 500
 
 
+@app.route('/api/speech/transcribe', methods=['POST'])
+def speech_transcribe():
+    """接收前端上传的音频文件，调用 FunASR 服务进行识别，并返回文本。"""
+    if 'audio' not in request.files:
+        return jsonify({'success': False, 'error': '缺少音频文件字段 audio'}), 400
+
+    audio_file = request.files['audio']
+    if audio_file.filename == '':
+        return jsonify({'success': False, 'error': '音频文件名为空'}), 400
+
+    filename = secure_filename(audio_file.filename)
+    if not filename.lower().endswith(('.wav', '.pcm')):
+        # 默认保存为 wav
+        filename = f"{filename.rsplit('.', 1)[0] if '.' in filename else filename}.wav"
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    stored_name = f"{timestamp}_{filename}"
+    stored_path = UPLOAD_ROOT / stored_name
+    try:
+        audio_file.save(stored_path)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'保存音频失败: {exc}'}), 500
+
+    try:
+        results = transcribe_audio(
+            host=FUNASR_HOST,
+            port=FUNASR_PORT,
+            audio_path=str(stored_path),
+            chunk_size=FUNASR_CHUNK_SIZE,
+            chunk_interval=FUNASR_CHUNK_INTERVAL,
+            mode=FUNASR_MODE,
+            hotword_path=FUNASR_HOTWORD,
+            use_itn=FUNASR_USE_ITN,
+            send_without_sleep=FUNASR_SEND_WITHOUT_SLEEP,
+            use_ssl=FUNASR_USE_SSL,
+            ssl_verify=FUNASR_SSL_VERIFY,
+        )
+    except (FunASRClientError, Exception) as exc:
+        console.print(f"[red]语音识别失败: {exc}[/red]")
+        return jsonify({'success': False, 'error': f'语音识别失败: {exc}'}), 500
+
+    # 组合识别文本（优先使用最终结果）
+    final_segments = [r.text for r in results if r.is_final and r.text]
+    if final_segments:
+        transcript = " ".join(final_segments)
+    else:
+        transcript = " ".join(r.text for r in results if r.text)
+
+    return jsonify({
+        'success': True,
+        'transcript': transcript,
+        'segments': [
+            {
+                'text': r.text,
+                'mode': r.mode,
+                'is_final': r.is_final,
+                'timestamp': r.timestamp,
+            } for r in results
+        ],
+        'audio_path': f"/api/speech/audio/{stored_name}"
+    })
+
+
+@app.route('/api/speech/audio/<path:filename>', methods=['GET'])
+def download_audio(filename: str):
+    """提供已上传音频的访问入口（用于调试或下载）。"""
+    try:
+        return send_from_directory(UPLOAD_ROOT, filename, as_attachment=True)
+    except FileNotFoundError:
+        return jsonify({'success': False, 'error': '音频文件不存在'}), 404
+
+
 @app.route('/api/reset', methods=['POST'])
 def reset():
     """重置虚拟学生
@@ -460,6 +566,13 @@ def reset():
                 except Exception as e:
                     console.print(f"[red]保存短期记忆到长期记忆失败: {e}[/red]")
         
+        # 清空上传的语音文件
+        try:
+            clear_uploads_directory()
+            console.print("[green]✓ 已清空上传音频文件[/green]")
+        except Exception as exc:
+            console.print(f"[yellow]清理上传音频时发生错误: {exc}[/yellow]")
+        
         # 重置虚拟学生
         current_student = None
         return jsonify({'success': True})
@@ -468,6 +581,11 @@ def reset():
         console.print(f"[red]重置时保存记忆失败: {e}[/red]")
         # 即使保存失败，也继续重置
         current_student = None
+        try:
+            clear_uploads_directory()
+            console.print("[green]✓ 已清空上传音频文件[/green]")
+        except Exception as exc:
+            console.print(f"[yellow]清理上传音频时发生错误: {exc}[/yellow]")
         return jsonify({'success': True})
 
 

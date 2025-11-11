@@ -36,6 +36,15 @@
             <!-- 聊天区域 -->
             <div class="chat-container">
                 <div id="chatMessages" class="chat-messages"></div>
+                <div class="speech-controls">
+                    <button id="speechStartBtn" disabled>🎤 开始识别</button>
+                    <button id="speechStopBtn" disabled>■ 停止</button>
+                    <label class="speech-option">
+                        <input type="checkbox" id="speechAutoSend" checked>
+                        自动追加到输入框
+                    </label>
+                    <div id="speechStatus" class="speech-status">语音识别未启动</div>
+                </div>
                 <div class="chat-input-container">
                     <input type="text" id="messageInput" placeholder="输入消息..." disabled>
                     <button id="sendBtn" onclick="sendMessage()" disabled>发送</button>
