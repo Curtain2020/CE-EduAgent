@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>虚拟学生对话系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 左侧主区域 -->
+        <div class="main-area">
+            <!-- 顶部控制栏 -->
+            <div class="control-panel">
+                <h1>虚拟学生对话系统</h1>
+                <div class="control-buttons">
+                    <div class="mode-selector">
+                        <label>
+                            <input type="checkbox" id="enableLongTermMemory" checked>
+                            长期记忆
+                        </label>
+                        <label>
+                            <input type="checkbox" id="enableKnowledgeBase">
+                            认知增强
+                        </label>
+                    </div>
+                    <div class="student-name-input">
+                        <input type="text" id="studentName" placeholder="学生姓名" value="小明">
+                        <button id="initBtn" onclick="initStudent()">初始化学生</button>
+                        <button id="resetBtn" onclick="resetStudent()" style="display: none;">重置</button>
+                    </div>
+                </div>
+                <div id="status" class="status"></div>
+            </div>
+            
+            <!-- 聊天区域 -->
+            <div class="chat-container">
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="messageInput" placeholder="输入消息..." disabled>
+                    <button id="sendBtn" onclick="sendMessage()" disabled>发送</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 右侧上下文区域 -->
+        <div class="context-panel">
+            <h2>学生上下文</h2>
+            <div id="contextInfo" class="context-info">
+                <p class="context-placeholder">请先初始化虚拟学生</p>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
+

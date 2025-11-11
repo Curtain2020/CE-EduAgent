@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>知识图谱可视化与编辑</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/kg_style.css') }}">
+    <!-- vis.js 网络图库 -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部控制栏 -->
+        <div class="control-panel">
+            <h1>知识图谱可视化与编辑系统</h1>
+            <div class="control-buttons">
+                <button id="loadBtn" onclick="loadKnowledgeGraph()">加载图谱</button>
+                <button id="saveBtn" onclick="saveKnowledgeGraph()" disabled>保存图谱</button>
+                <button id="resetViewBtn" onclick="resetView()" disabled>重置视图</button>
+                <button id="fitViewBtn" onclick="fitView()" disabled>适应窗口</button>
+                <div class="cluster-controls">
+                    <label>聚合方式:</label>
+                    <select id="clusterMode" onchange="changeClusterMode()">
+                        <option value="none">不聚合</option>
+                        <option value="grade_status">按年级聚合（年级内按状态分组）</option>
+                    </select>
+                    <button id="expandAllBtn" onclick="expandAllClusters()" disabled style="display: none;">展开全部</button>
+                    <button id="collapseAllBtn" onclick="collapseAllClusters()" disabled style="display: none;">折叠全部</button>
+                </div>
+                <div class="status-info">
+                    <span id="statusText">未加载</span>
+                    <span id="nodeCount" class="count-badge">节点: 0</span>
+                    <span id="edgeCount" class="count-badge">边: 0</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 主内容区域 -->
+        <div class="main-content">
+            <!-- 左侧：图谱可视化区域 -->
+            <div class="graph-container">
+                <div id="knowledgeGraph" class="graph-canvas"></div>
+            </div>
+            
+            <!-- 右侧：详情面板和缩放控制 -->
+            <div class="right-panel">
+                <!-- 缩放控制按钮 -->
+                <div class="zoom-controls">
+                    <button id="zoomInBtn" onclick="zoomIn()" title="放大">+</button>
+                    <button id="zoomOutBtn" onclick="zoomOut()" title="缩小">−</button>
+                    <button id="zoomFitBtn" onclick="fitView()" title="适应窗口">⌂</button>
+                    <button id="zoomResetBtn" onclick="resetZoom()" title="重置缩放">↺</button>
+                </div>
+                
+                <!-- 详情面板 -->
+                <div class="detail-panel">
+                    <div class="panel-header">
+                        <h2>节点/边详情</h2>
+                        <button id="closeDetailBtn" onclick="closeDetailPanel()" style="display: none;">×</button>
+                    </div>
+                    <div id="detailContent" class="detail-content">
+                        <p class="placeholder">点击节点或边查看详情</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 节点编辑模态框 -->
+    <div id="nodeEditModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>编辑节点</h3>
+                <button class="close-btn" onclick="closeNodeEditModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <form id="nodeEditForm">
+                    <input type="hidden" id="editNodeUuid">
+                    <div class="form-group">
+                        <label>节点名称:</label>
+                        <input type="text" id="editNodeName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>描述:</label>
+                        <textarea id="editNodeDescription" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>年级:</label>
+                        <input type="text" id="editNodeGrade">
+                    </div>
+                    <div class="form-group">
+                        <label>学科:</label>
+                        <input type="text" id="editNodeSubject">
+                    </div>
+                    <div class="form-group">
+                        <label>出版社:</label>
+                        <input type="text" id="editNodePublisher">
+                    </div>
+                    <div class="form-group">
+                        <label>状态:</label>
+                        <input type="number" id="editNodeStatus" value="-1">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" onclick="saveNodeEdit()">保存</button>
+                        <button type="button" onclick="closeNodeEditModal()">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 边编辑模态框 -->
+    <div id="edgeEditModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>编辑边</h3>
+                <button class="close-btn" onclick="closeEdgeEditModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <form id="edgeEditForm">
+                    <input type="hidden" id="editEdgeStartUuid">
+                    <input type="hidden" id="editEdgeEndUuid">
+                    <div class="form-group">
+                        <label>关系类型:</label>
+                        <select id="editEdgeType">
+                            <option value="前置知识">前置知识</option>
+                            <option value="包含">包含</option>
+                            <option value="区分排斥">区分排斥</option>
+                            <option value="一般关联">一般关联</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>描述:</label>
+                        <textarea id="editEdgeDescription" rows="3"></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" onclick="saveEdgeEdit()">保存</button>
+                        <button type="button" onclick="closeEdgeEditModal()">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/kg_visualization.js') }}"></script>
+</body>
+</html>
+

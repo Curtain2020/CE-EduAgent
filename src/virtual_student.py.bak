@@ -1,0 +1,15 @@
+"""
+原文件已拆分为多个模块，请使用 src/main.py 运行程序
+
+代码结构：
+- config/          - 配置模块
+- memory/          - 记忆管理模块
+- api/             - API客户端模块
+- student/         - 学生相关模块
+- tools/           - 工具模块
+- workflow/        - 工作流模块
+- main.py          - 主程序入口
+
+详细说明请查看 src/README.md
+"""
+
