@@ -5,6 +5,7 @@ Flask Web应用 - 虚拟学生对话系统
 
 import json
 import asyncio
+from typing import Dict, List, Any
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_cors import CORS
 import sys
@@ -30,8 +31,12 @@ from langchain_core.messages import ToolMessage
 app = Flask(__name__)
 CORS(app)
 
-# 全局虚拟学生实例
-current_student: VirtualStudent = None
+# 支持的学生名单
+ALLOWED_STUDENTS = ["崔展豪", "李昌龙", "包梓群", "丽娃", "张晓丹", "萧华诗"]
+
+# 全局虚拟学生实例集合
+current_students: Dict[str, VirtualStudent] = {}
+active_student_names: List[str] = []
 
 # 语音识别配置
 FUNASR_HOST = os.environ.get("FUNASR_HOST", "59.78.189.185")
@@ -98,51 +103,103 @@ def index():
 
 @app.route('/api/init', methods=['POST'])
 def init_student():
-    """初始化虚拟学生
-    
-    请求体：
-    {
-        "student_name": "小明",
-        "enable_long_term_memory": true,
-        "enable_knowledge_base": false
-    }
-    """
-    global current_student
-    
+    """初始化虚拟学生，可同时初始化多名学生"""
+    global current_students, active_student_names
+
+    data = request.json or {}
+    raw_configs = data.get('student_configs')
+
     try:
-        data = request.json
-        student_name = data.get('student_name', '小明')
-        enable_long_term_memory = data.get('enable_long_term_memory', True)
-        enable_knowledge_base = data.get('enable_knowledge_base', False)
-        
-        # 创建虚拟学生
-        current_student = VirtualStudent(
-            student_name=student_name,
-            enable_long_term_memory=enable_long_term_memory,
-            enable_knowledge_base=enable_knowledge_base
-        )
-        
-        # 创建学生用户和线程
-        student_id = run_async(current_student.create_student_user())
-        thread_id = run_async(current_student.create_study_thread())
-        
-        if not student_id or not thread_id:
+        if raw_configs and isinstance(raw_configs, list):
+            validated_configs = []
+            for item in raw_configs:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get('student_name')
+                if not name or name not in ALLOWED_STUDENTS:
+                    return jsonify({
+                        'success': False,
+                        'error': f"存在非法学生：{name or '未命名学生'}"
+                    }), 400
+                validated_configs.append({
+                    'student_name': name,
+                    'enable_long_term_memory': bool(item.get('enable_long_term_memory', True)),
+                    'enable_knowledge_base': bool(item.get('enable_knowledge_base', False))
+                })
+        else:
+            # 向后兼容旧版单学生初始化
+            student_name = data.get('student_name')
+            student_names = data.get('student_names')
+            if student_name:
+                student_names = [student_name]
+            if not student_names or not isinstance(student_names, list):
+                return jsonify({
+                    'success': False,
+                    'error': '请提供至少一名学生名称'
+                }), 400
+            invalid = [name for name in student_names if name not in ALLOWED_STUDENTS]
+            if invalid:
+                return jsonify({
+                    'success': False,
+                    'error': f"存在非法学生：{'、'.join(invalid)}"
+                }), 400
+            enable_long_term_memory = bool(data.get('enable_long_term_memory', True))
+            enable_knowledge_base = bool(data.get('enable_knowledge_base', False))
+            validated_configs = [
+                {
+                    'student_name': name,
+                    'enable_long_term_memory': enable_long_term_memory,
+                    'enable_knowledge_base': enable_knowledge_base
+                }
+                for name in student_names
+            ]
+
+        if not validated_configs:
             return jsonify({
                 'success': False,
-                'error': '创建学生用户或线程失败'
-            }), 500
-        
+                'error': '请提供有效的学生配置'
+            }), 400
+
+        # 重置现有学生
+        current_students.clear()
+        active_student_names = []
+
+        response_configs: List[Dict[str, Any]] = []
+
+        for cfg in validated_configs:
+            name = cfg['student_name']
+            student = VirtualStudent(
+                student_name=name,
+                enable_long_term_memory=cfg['enable_long_term_memory'],
+                enable_knowledge_base=cfg['enable_knowledge_base']
+            )
+
+            student_id = run_async(student.create_student_user())
+            thread_id = run_async(student.create_study_thread())
+            if not student_id or not thread_id:
+                raise RuntimeError(f"{name} 创建学生用户或线程失败")
+
+            current_students[name] = student
+            active_student_names.append(name)
+            response_configs.append({
+                'student_name': name,
+                'enable_long_term_memory': cfg['enable_long_term_memory'],
+                'enable_knowledge_base': cfg['enable_knowledge_base'],
+                'student_id': student_id,
+                'thread_id': thread_id
+            })
+            console.print(f"[green]✓ 学生 {name} 初始化完成[/green]")
+
         return jsonify({
             'success': True,
-            'student_id': student_id,
-            'thread_id': thread_id,
-            'student_name': current_student.student_name,
-            'enable_long_term_memory': enable_long_term_memory,
-            'enable_knowledge_base': enable_knowledge_base
+            'student_names': active_student_names,
+            'student_configs': response_configs
         })
-    
+
     except Exception as e:
         console.print(f"[red]初始化学生失败: {e}[/red]")
+        current_students.clear()
+        active_student_names = []
         return jsonify({
             'success': False,
             'error': str(e)
@@ -151,36 +208,66 @@ def init_student():
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    """发送消息并获取回复
-    
-    请求体：
-    {
-        "message": "你好，小明"
-    }
-    """
-    global current_student
-    
-    if current_student is None:
+    """发送消息并获取回复，支持多学生并行"""
+    if not active_student_names:
         return jsonify({
             'success': False,
             'error': '请先初始化虚拟学生'
         }), 400
-    
+
     try:
-        data = request.json
-        user_message = data.get('message', '')
-        
+        data = request.json or {}
+        user_message = data.get('message', '').strip()
+
         if not user_message:
             return jsonify({
                 'success': False,
                 'error': '消息不能为空'
             }), 400
-        
-        # 异步处理对话
-        result = run_async(_process_chat(user_message))
-        
-        return jsonify(result)
-    
+
+        requested_names = data.get('student_names')
+        if requested_names and isinstance(requested_names, list):
+            target_names = [name for name in requested_names if name in current_students]
+            if not target_names:
+                return jsonify({
+                    'success': False,
+                    'error': '未找到目标学生'
+                }), 400
+        else:
+            target_names = list(active_student_names)
+
+        async def process_all():
+            tasks = [
+                _process_chat_for_student(current_students[name], user_message)
+                for name in target_names
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            payload = []
+            for name, result in zip(target_names, results):
+                if isinstance(result, Exception):
+                    console.print(f"[red]{name} 对话失败: {result}[/red]")
+                    payload.append({
+                        'student_name': name,
+                        'success': False,
+                        'error': str(result)
+                    })
+                else:
+                    payload.append(result)
+            return payload
+
+        responses = run_async(process_all())
+        overall_success = all(item.get('success') for item in responses)
+        primary_response = next(
+            (item.get('response') for item in responses if item.get('success')),
+            ''
+        )
+
+        return jsonify({
+            'success': overall_success,
+            'responses': responses,
+            'response': primary_response
+        })
+
     except Exception as e:
         console.print(f"[red]对话处理失败: {e}[/red]")
         console.print(f"[red]错误堆栈: {traceback.format_exc()}[/red]")
@@ -190,27 +277,25 @@ def chat():
         }), 500
 
 
-async def _process_chat(user_message: str):
-    """处理对话的异步函数"""
-    global current_student
-    
+async def _process_chat_for_student(student: VirtualStudent, user_message: str):
+    """处理指定学生对话的异步函数"""
     # 获取完整的记忆上下文
-    context_info = await current_student.get_full_memory_context()
-    
+    context_info = await student.get_full_memory_context()
+
     # 获取系统提示词
-    system_prompt = current_student.get_system_prompt(context_info)
-    
+    system_prompt = student.get_system_prompt(context_info)
+
     # 构建消息列表
     messages = [SystemMessage(content=system_prompt)]
-    
+
     # 添加历史对话（短期记忆）
-    for conv in current_student.short_term_memory.memory_queue:
+    for conv in student.short_term_memory.memory_queue:
         messages.append(HumanMessage(content=conv['user_message']))
         messages.append(AIMessage(content=conv['student_response']))
-    
+
     # 添加当前用户消息
     messages.append(HumanMessage(content=user_message))
-    
+
     # 转换为Qwen API格式
     qwen_client = QwenAPIClient()
     qwen_messages = []
@@ -238,39 +323,32 @@ async def _process_chat(user_message: str):
             qwen_messages.append(msg_dict)
         else:
             qwen_messages.append({"role": "user", "content": msg.content})
-    
+
     # 获取工具定义
-    tools = current_student.get_tool_definitions()
-    
+    tools = student.get_tool_definitions()
+
     # 调用Qwen API
     response = await qwen_client.chat_completion(
         qwen_messages, 
         temperature=0.7, 
         tools=tools
     )
-    
+
     # 处理响应
     result = {
         'success': True,
         'response': response.get('content', ''),
         'tool_calls': [],
-        'intermediate_steps': []
+        'intermediate_steps': [],
+        'student_name': student.student_name
     }
-    
+
     # 处理工具调用
     tool_calls = response.get('tool_calls', [])
     if tool_calls:
         # 获取工具列表
-        tools_list = current_student.get_tools()
-        
-        # 创建工具映射（按名称）
-        tools_map = {}
-        for tool in tools_list:
-            if hasattr(tool, 'name'):
-                tools_map[tool.name] = tool
-            elif hasattr(tool, '__name__'):
-                tools_map[tool.__name__] = tool
-        
+        tools_list = student.get_tools()
+
         # 转换工具调用格式
         formatted_tool_calls = []
         for call in tool_calls:
@@ -280,10 +358,10 @@ async def _process_chat(user_message: str):
                     args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
                 except:
                     args_dict = {}
-                
+
                 tool_name = call["function"]["name"]
                 tool_id = call.get("id", f"call_{len(formatted_tool_calls)}")
-                
+
                 formatted_tool_calls.append({
                     "name": tool_name,
                     "args": args_dict,
@@ -303,7 +381,7 @@ async def _process_chat(user_message: str):
                 tool_name = tool_call['name']
                 tool_args = tool_call['args']
                 tool_id = tool_call['id']
-                
+
                 # 找到对应的工具
                 matched_tool = None
                 for tool in tools_list:
@@ -311,7 +389,7 @@ async def _process_chat(user_message: str):
                     if hasattr(tool, 'name') and tool.name == tool_name:
                         matched_tool = tool
                         break
-                
+
                 if matched_tool:
                     # 执行工具
                     try:
@@ -353,7 +431,8 @@ async def _process_chat(user_message: str):
                         result['intermediate_steps'].append({
                             'tool': tool_name,
                             'arguments': tool_args,
-                            'result': str(tool_result)
+                            'result': str(tool_result),
+                            'student_name': student.student_name
                         })
                     except Exception as e:
                         error_msg = f"工具执行错误: {str(e)}"
@@ -365,7 +444,8 @@ async def _process_chat(user_message: str):
                         result['intermediate_steps'].append({
                             'tool': tool_name,
                             'arguments': tool_args,
-                            'result': error_msg
+                            'result': error_msg,
+                            'student_name': student.student_name
                         })
             
             # 如果有工具结果，再次调用API获取最终回复
@@ -418,49 +498,52 @@ async def _process_chat(user_message: str):
                     temperature=0.7,
                     tools=tools
                 )
-                
+
                 result['response'] = final_response.get('content', '')
-    
+
     # 保存对话到短期记忆
-    await current_student.add_conversation_to_memory(
+    await student.add_conversation_to_memory(
         user_message,
         result['response']
     )
-    
+
     return result
 
 
 @app.route('/api/context', methods=['GET'])
 def get_context():
     """获取虚拟学生的上下文信息"""
-    global current_student
-    
-    if current_student is None:
+    if not active_student_names:
         return jsonify({
             'success': False,
             'error': '请先初始化虚拟学生'
         }), 400
-    
+
     try:
-        # 获取完整上下文
-        full_context = run_async(current_student.get_full_memory_context())
-        
-        # 获取短期记忆
-        short_term_memory = current_student.short_term_memory.memory_queue.copy()
-        
-        # 获取长期记忆上下文
-        long_term_context = run_async(current_student.get_long_term_memory_context())
-        
+        students_payload = []
+        for name in active_student_names:
+            student = current_students.get(name)
+            if not student:
+                continue
+
+            full_context = run_async(student.get_full_memory_context())
+            short_term_memory = student.short_term_memory.memory_queue.copy()
+            long_term_context = run_async(student.get_long_term_memory_context())
+
+            students_payload.append({
+                'student_name': student.student_name,
+                'short_term_memory': short_term_memory,
+                'long_term_context': long_term_context,
+                'full_context': full_context,
+                'enable_long_term_memory': student.enable_long_term_memory,
+                'enable_knowledge_base': student.enable_knowledge_base
+            })
+
         return jsonify({
             'success': True,
-            'short_term_memory': short_term_memory,
-            'long_term_context': long_term_context,
-            'full_context': full_context,
-            'student_name': current_student.student_name,
-            'enable_long_term_memory': current_student.enable_long_term_memory,
-            'enable_knowledge_base': current_student.enable_knowledge_base
+            'students': students_payload
         })
-    
+
     except Exception as e:
         console.print(f"[red]获取上下文失败: {e}[/red]")
         return jsonify({
@@ -547,45 +630,37 @@ def reset():
     
     在重置前，如果开启了长期记忆，自动将短期记忆存入长期记忆
     """
-    global current_student
-    
-    if current_student is None:
+    global current_students, active_student_names
+
+    if not current_students:
         return jsonify({'success': True})
-    
+
     try:
-        # 如果开启了长期记忆，先将短期记忆存入长期记忆
-        if current_student.enable_long_term_memory and current_student.thread_id:
-            # 检查是否有短期记忆需要保存
-            if current_student.short_term_memory.memory_queue:
-                console.print("[yellow]正在将短期记忆存入长期记忆...[/yellow]")
-                
-                try:
-                    # 使用run_async确保事件循环正确管理
-                    run_async(current_student.flush_memory_to_long_term())
-                    console.print("[green]✓ 短期记忆已成功存入长期记忆[/green]")
-                except Exception as e:
-                    console.print(f"[red]保存短期记忆到长期记忆失败: {e}[/red]")
-        
+        for student in list(current_students.values()):
+            if student.enable_long_term_memory and student.thread_id:
+                if student.short_term_memory.memory_queue:
+                    console.print(f"[yellow]正在将 {student.student_name} 的短期记忆存入长期记忆...[/yellow]")
+                    try:
+                        run_async(student.flush_memory_to_long_term())
+                        console.print(f"[green]✓ {student.student_name} 的短期记忆已成功存入长期记忆[/green]")
+                    except Exception as e:
+                        console.print(f"[red]保存 {student.student_name} 的短期记忆失败: {e}[/red]")
+
         # 清空上传的语音文件
         try:
             clear_uploads_directory()
             console.print("[green]✓ 已清空上传音频文件[/green]")
         except Exception as exc:
             console.print(f"[yellow]清理上传音频时发生错误: {exc}[/yellow]")
-        
-        # 重置虚拟学生
-        current_student = None
+
+        current_students.clear()
+        active_student_names = []
         return jsonify({'success': True})
-    
+
     except Exception as e:
         console.print(f"[red]重置时保存记忆失败: {e}[/red]")
-        # 即使保存失败，也继续重置
-        current_student = None
-        try:
-            clear_uploads_directory()
-            console.print("[green]✓ 已清空上传音频文件[/green]")
-        except Exception as exc:
-            console.print(f"[yellow]清理上传音频时发生错误: {exc}[/yellow]")
+        current_students.clear()
+        active_student_names = []
         return jsonify({'success': True})
 
 

@@ -16,18 +16,30 @@
                 <div class="control-buttons">
                     <div class="mode-selector">
                         <label>
-                            <input type="checkbox" id="enableLongTermMemory" checked>
-                            长期记忆
+                            <input type="checkbox" id="globalEnableLongTermMemory" checked>
+                            长期记忆（统一配置）
                         </label>
                         <label>
-                            <input type="checkbox" id="enableKnowledgeBase">
-                            认知增强
+                            <input type="checkbox" id="globalEnableKnowledgeBase">
+                            认知增强（统一配置）
                         </label>
+                        <button type="button" class="apply-global-btn" id="applyGlobalBtn" onclick="applyGlobalConfig()">应用到选中学生</button>
                     </div>
-                    <div class="student-name-input">
-                        <input type="text" id="studentName" placeholder="学生姓名" value="小明">
-                        <button id="initBtn" onclick="initStudent()">初始化学生</button>
-                        <button id="resetBtn" onclick="resetStudent()" style="display: none;">重置</button>
+                    <div class="student-selector" id="studentSelectorPanel">
+                        <div class="student-selector-header">
+                            <div class="student-selector-header-text">
+                                <div class="student-selector-title">学生选择（最多六名，可多选）</div>
+                                <div class="student-selector-hint">仅支持以下六名学生，可单独配置长期记忆与认知增强。</div>
+                            </div>
+                            <button type="button" class="student-selector-toggle" id="studentSelectorToggle" onclick="toggleStudentPanel()">收起</button>
+                        </div>
+                        <div class="student-selector-content" id="studentSelectorContent">
+                            <div class="student-list" id="studentList"></div>
+                            <div class="student-selector-actions">
+                                <button id="initBtn" onclick="initStudent()">初始化学生</button>
+                                <button id="resetBtn" onclick="resetStudent()" style="display: none;">重置</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div id="status" class="status"></div>

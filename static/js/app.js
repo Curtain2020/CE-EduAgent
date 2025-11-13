@@ -1,18 +1,208 @@
 // 全局变量
 let isInitialized = false;
 let isLoading = false;
+let activeStudents = [];
+const allowedStudents = [
+    { name: '崔展豪', enableLongTermMemory: true, enableKnowledgeBase: false },
+    { name: '李昌龙', enableLongTermMemory: true, enableKnowledgeBase: false },
+    { name: '包梓群', enableLongTermMemory: true, enableKnowledgeBase: false },
+    { name: '丽娃', enableLongTermMemory: true, enableKnowledgeBase: false },
+    { name: '张晓丹', enableLongTermMemory: true, enableKnowledgeBase: false },
+    { name: '萧华诗', enableLongTermMemory: true, enableKnowledgeBase: false }
+];
+
+let studentConfigs = {};
+let activeStudentConfigs = {};
+let studentPanelCollapsed = false;
+
+function initializeStudentSelector() {
+    const listEl = document.getElementById('studentList');
+    if (!listEl) {
+        return;
+    }
+
+    studentConfigs = {};
+    listEl.innerHTML = '';
+
+    allowedStudents.forEach((student) => {
+        studentConfigs[student.name] = {
+            selected: false,
+            enableLongTermMemory: student.enableLongTermMemory,
+            enableKnowledgeBase: student.enableKnowledgeBase
+        };
+
+        const itemEl = document.createElement('div');
+        itemEl.className = 'student-item';
+        itemEl.dataset.student = student.name;
+
+        const nameLabel = document.createElement('label');
+        const nameCheckbox = document.createElement('input');
+        nameCheckbox.type = 'checkbox';
+        nameCheckbox.className = 'student-checkbox';
+        nameCheckbox.value = student.name;
+        nameCheckbox.addEventListener('change', (event) => {
+            studentConfigs[student.name].selected = event.target.checked;
+            itemEl.classList.toggle('selected', event.target.checked);
+            updateApplyGlobalBtnState();
+        });
+
+        nameLabel.appendChild(nameCheckbox);
+        nameLabel.appendChild(document.createTextNode(student.name));
+
+        const longTermLabel = document.createElement('label');
+        const longTermCheckbox = document.createElement('input');
+        longTermCheckbox.type = 'checkbox';
+        longTermCheckbox.className = 'student-long-term';
+        longTermCheckbox.checked = student.enableLongTermMemory;
+        longTermCheckbox.addEventListener('change', (event) => {
+            studentConfigs[student.name].enableLongTermMemory = event.target.checked;
+        });
+        longTermLabel.appendChild(longTermCheckbox);
+        longTermLabel.appendChild(document.createTextNode('长期记忆'));
+
+        const knowledgeLabel = document.createElement('label');
+        const knowledgeCheckbox = document.createElement('input');
+        knowledgeCheckbox.type = 'checkbox';
+        knowledgeCheckbox.className = 'student-knowledge';
+        knowledgeCheckbox.checked = student.enableKnowledgeBase;
+        knowledgeCheckbox.addEventListener('change', (event) => {
+            studentConfigs[student.name].enableKnowledgeBase = event.target.checked;
+        });
+        knowledgeLabel.appendChild(knowledgeCheckbox);
+        knowledgeLabel.appendChild(document.createTextNode('认知增强'));
+
+        itemEl.appendChild(nameLabel);
+        itemEl.appendChild(longTermLabel);
+        itemEl.appendChild(knowledgeLabel);
+        listEl.appendChild(itemEl);
+    });
+
+    updateApplyGlobalBtnState();
+    updateStudentPanelVisualState();
+}
+
+function updateApplyGlobalBtnState() {
+    const btn = document.getElementById('applyGlobalBtn');
+    if (!btn) return;
+    if (btn.dataset.locked === 'true') {
+        btn.disabled = true;
+        return;
+    }
+    const hasSelected = Object.values(studentConfigs).some((cfg) => cfg.selected);
+    btn.disabled = !hasSelected;
+}
+
+function getGlobalConfig() {
+    const globalLongTerm = document.getElementById('globalEnableLongTermMemory');
+    const globalKnowledge = document.getElementById('globalEnableKnowledgeBase');
+    return {
+        enableLongTermMemory: globalLongTerm ? globalLongTerm.checked : true,
+        enableKnowledgeBase: globalKnowledge ? globalKnowledge.checked : false
+    };
+}
+
+function applyGlobalConfig() {
+    const { enableLongTermMemory, enableKnowledgeBase } = getGlobalConfig();
+    const listEl = document.getElementById('studentList');
+    if (!listEl) return;
+
+    let appliedCount = 0;
+
+    Object.entries(studentConfigs).forEach(([name, cfg]) => {
+        if (!cfg.selected) return;
+        cfg.enableLongTermMemory = enableLongTermMemory;
+        cfg.enableKnowledgeBase = enableKnowledgeBase;
+        appliedCount += 1;
+        const itemEl = listEl.querySelector(`.student-item[data-student="${name}"]`);
+        if (itemEl) {
+            const longTermCheckbox = itemEl.querySelector('.student-long-term');
+            const knowledgeCheckbox = itemEl.querySelector('.student-knowledge');
+            if (longTermCheckbox) {
+                longTermCheckbox.checked = enableLongTermMemory;
+            }
+            if (knowledgeCheckbox) {
+                knowledgeCheckbox.checked = enableKnowledgeBase;
+            }
+        }
+    });
+    if (appliedCount > 0) {
+        updateStatus('已将统一配置应用至选中学生', 'success');
+    } else {
+        updateStatus('请先勾选需要应用的学生', 'error');
+    }
+}
+
+function setStudentSelectorEnabled(enabled) {
+    const listEl = document.getElementById('studentList');
+    const globalLongTerm = document.getElementById('globalEnableLongTermMemory');
+    const globalKnowledge = document.getElementById('globalEnableKnowledgeBase');
+    const applyBtn = document.getElementById('applyGlobalBtn');
+    const toggleBtn = document.getElementById('studentSelectorToggle');
+
+    if (globalLongTerm) globalLongTerm.disabled = !enabled;
+    if (globalKnowledge) globalKnowledge.disabled = !enabled;
+    if (applyBtn) {
+        applyBtn.dataset.locked = (!enabled).toString();
+        applyBtn.disabled = !enabled;
+    }
+    if (toggleBtn) {
+        toggleBtn.disabled = false;
+    }
+
+    if (!listEl) return;
+
+    listEl.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+        input.disabled = !enabled;
+    });
+
+    listEl.querySelectorAll('.student-item').forEach((item) => {
+        item.classList.toggle('disabled', !enabled);
+    });
+
+    if (enabled) {
+        updateApplyGlobalBtnState();
+    }
+    updateStudentPanelVisualState();
+}
+
+function toggleStudentPanel() {
+    studentPanelCollapsed = !studentPanelCollapsed;
+    updateStudentPanelVisualState();
+}
+
+function updateStudentPanelVisualState() {
+    const panel = document.getElementById('studentSelectorPanel');
+    const toggleBtn = document.getElementById('studentSelectorToggle');
+    if (!panel || !toggleBtn) return;
+    panel.classList.toggle('collapsed', studentPanelCollapsed);
+    toggleBtn.textContent = studentPanelCollapsed ? '展开' : '收起';
+    toggleBtn.setAttribute('aria-expanded', (!studentPanelCollapsed).toString());
+}
+
+function getSelectedStudentConfigs() {
+    return Object.entries(studentConfigs)
+        .filter(([, cfg]) => cfg.selected)
+        .map(([name, cfg]) => ({
+            student_name: name,
+            enable_long_term_memory: cfg.enableLongTermMemory,
+            enable_knowledge_base: cfg.enableKnowledgeBase
+        }));
+}
 
 // 初始化学生
 async function initStudent() {
     if (isLoading) return;
-    
-    const studentName = document.getElementById('studentName').value.trim() || '小明';
-    const enableLongTermMemory = document.getElementById('enableLongTermMemory').checked;
-    const enableKnowledgeBase = document.getElementById('enableKnowledgeBase').checked;
-    
+
+    const selectedConfigs = getSelectedStudentConfigs();
+    if (selectedConfigs.length === 0) {
+        updateStatus('请至少选择一名学生', 'error');
+        return;
+    }
+
     isLoading = true;
     updateStatus('正在初始化虚拟学生...', 'success');
-    
+    setStudentSelectorEnabled(false);
+
     try {
         const response = await fetch('/api/init', {
             method: 'POST',
@@ -20,42 +210,65 @@ async function initStudent() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                student_name: studentName,
-                enable_long_term_memory: enableLongTermMemory,
-                enable_knowledge_base: enableKnowledgeBase
+                student_configs: selectedConfigs
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             isInitialized = true;
-            updateStatus(`虚拟学生 ${data.student_name} 初始化成功！`, 'success');
+            activeStudents = Array.isArray(data.student_names) && data.student_names.length > 0
+                ? data.student_names
+                : selectedConfigs.map((cfg) => cfg.student_name);
+
+            const configsFromServer = Array.isArray(data.student_configs) ? data.student_configs : selectedConfigs;
+            activeStudentConfigs = {};
+            configsFromServer.forEach((cfg) => {
+                activeStudentConfigs[cfg.student_name] = {
+                    enable_long_term_memory: cfg.enable_long_term_memory,
+                    enable_knowledge_base: cfg.enable_knowledge_base
+                };
+            });
+
+            updateStatus(`已初始化学生：${activeStudents.join('、')}`, 'success');
             updateSpeechButtons();
-            
+
             // 更新UI
             document.getElementById('initBtn').style.display = 'none';
             document.getElementById('resetBtn').style.display = 'inline-block';
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
-            document.getElementById('studentName').disabled = true;
-            document.getElementById('enableLongTermMemory').disabled = true;
-            document.getElementById('enableKnowledgeBase').disabled = true;
+            setStudentSelectorEnabled(false);
             
             // 清空聊天记录
             document.getElementById('chatMessages').innerHTML = '';
-            
+
             // 添加欢迎消息
-            addMessage('assistant', `你好，老师！我是${data.student_name}，${enableKnowledgeBase ? '已启用认知增强模式' : '已启用基础模式'}，准备开始学习！`);
-            
+            activeStudents.forEach((name) => {
+                const cfg = activeStudentConfigs[name] || {
+                    enable_long_term_memory: true,
+                    enable_knowledge_base: false
+                };
+                const modeText = cfg.enable_knowledge_base ? '已启用认知增强模式' : '已启用基础模式';
+                addMessage('assistant', `你好，老师！我是${name}，${modeText}，准备开始学习！`, {
+                    senderName: name
+                });
+            });
+
             // 更新上下文
             updateContext();
+
+            studentPanelCollapsed = true;
+            updateStudentPanelVisualState();
         } else {
             updateStatus('初始化失败: ' + data.error, 'error');
+            setStudentSelectorEnabled(true);
         }
     } catch (error) {
         updateStatus('初始化失败: ' + error.message, 'error');
         console.error('初始化错误:', error);
+        setStudentSelectorEnabled(true);
     } finally {
         isLoading = false;
     }
@@ -78,6 +291,8 @@ async function resetStudent() {
         
         if (data.success) {
             isInitialized = false;
+            activeStudents = [];
+            activeStudentConfigs = {};
             updateStatus('已重置，短期记忆已存入长期记忆', 'success');
         } else {
             updateStatus('重置失败: ' + (data.error || '未知错误'), 'error');
@@ -92,9 +307,10 @@ async function resetStudent() {
         document.getElementById('resetBtn').style.display = 'none';
         document.getElementById('messageInput').disabled = true;
         document.getElementById('sendBtn').disabled = true;
-        document.getElementById('studentName').disabled = false;
-        document.getElementById('enableLongTermMemory').disabled = false;
-        document.getElementById('enableKnowledgeBase').disabled = false;
+        initializeStudentSelector();
+        setStudentSelectorEnabled(true);
+        studentPanelCollapsed = false;
+        updateStudentPanelVisualState();
         
         document.getElementById('chatMessages').innerHTML = '';
         document.getElementById('contextInfo').innerHTML = '<p class="context-placeholder">请先初始化虚拟学生</p>';
@@ -114,11 +330,14 @@ async function sendMessage() {
     if (!message) return;
     
     // 添加用户消息到界面
-    addMessage('user', message);
+    addMessage('user', message, { senderName: '老师' });
     input.value = '';
     
     // 显示加载状态
-    const loadingId = addMessage('assistant', '正在思考...', true);
+    const loadingId = addMessage('assistant', '正在思考...', {
+        isLoading: true,
+        senderName: activeStudents.length > 1 ? '学生（全部）' : (activeStudents[0] || '学生')
+    });
     isLoading = true;
     document.getElementById('sendBtn').disabled = true;
     
@@ -140,16 +359,34 @@ async function sendMessage() {
         if (loadingElement) {
             loadingElement.remove();
         }
-        
-        if (data.success) {
-            // 添加助手回复
-            addMessage('assistant', data.response, false, data.tool_calls, data.intermediate_steps);
-            
-            // 更新上下文
-            updateContext();
-        } else {
-            addMessage('assistant', '抱歉，处理消息时出错: ' + data.error);
+        if (!data.success && !Array.isArray(data.responses)) {
+            throw new Error(data.error || '处理消息时出错');
         }
+
+        const responses = Array.isArray(data.responses) ? data.responses : [];
+        if (responses.length === 0 && data.response) {
+            // 兼容旧接口
+            addMessage('assistant', data.response, {
+                senderName: activeStudents[0] || '学生'
+            });
+        } else {
+            responses.forEach((item) => {
+                if (!item.success) {
+                    addMessage('assistant', `抱歉，处理消息时出错: ${item.error}`, {
+                        senderName: item.student_name || '学生'
+                    });
+                    return;
+                }
+                addMessage('assistant', item.response, {
+                    senderName: item.student_name || '学生',
+                    toolCalls: item.tool_calls,
+                    intermediateSteps: item.intermediate_steps
+                });
+            });
+        }
+
+        // 更新上下文
+        updateContext();
     } catch (error) {
         // 移除加载消息
         const loadingElement = document.getElementById(loadingId);
@@ -157,7 +394,9 @@ async function sendMessage() {
             loadingElement.remove();
         }
         
-        addMessage('assistant', '抱歉，发送消息时出错: ' + error.message);
+        addMessage('assistant', '抱歉，发送消息时出错: ' + error.message, {
+            senderName: '系统'
+        });
         console.error('发送消息错误:', error);
     } finally {
         isLoading = false;
@@ -167,7 +406,14 @@ async function sendMessage() {
 }
 
 // 添加消息到聊天界面
-function addMessage(type, content, isLoading = false, toolCalls = [], intermediateSteps = []) {
+function addMessage(type, content, options = {}) {
+    const {
+        isLoading = false,
+        toolCalls = [],
+        intermediateSteps = [],
+        senderName
+    } = options;
+
     const messagesContainer = document.getElementById('chatMessages');
     const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
     
@@ -178,14 +424,16 @@ function addMessage(type, content, isLoading = false, toolCalls = [], intermedia
     const messageContent = document.createElement('div');
     messageContent.className = 'message-content';
     
+    const headerTitle = senderName || (type === 'user' ? '老师' : '学生');
+
     if (type === 'user') {
         messageContent.innerHTML = `
-            <div class="message-header">老师</div>
+            <div class="message-header">${escapeHtml(headerTitle)}</div>
             <div>${escapeHtml(content)}</div>
         `;
     } else {
         let html = `
-            <div class="message-header">学生</div>
+            <div class="message-header">${escapeHtml(headerTitle)}</div>
             <div>${escapeHtml(content)}</div>
         `;
         
@@ -229,50 +477,62 @@ function addMessage(type, content, isLoading = false, toolCalls = [], intermedia
 
 // 更新上下文信息
 async function updateContext() {
+    if (!isInitialized || activeStudents.length === 0) {
+        return;
+    }
+
     try {
         const response = await fetch('/api/context');
         const data = await response.json();
-        
-        if (data.success) {
-            const contextInfo = document.getElementById('contextInfo');
-            let html = '';
-            
-            // 学生信息
-            html += `<div class="context-section">`;
-            html += `<h3>学生信息</h3>`;
-            html += `<p><span class="label">姓名:</span> ${escapeHtml(data.student_name)}</p>`;
-            html += `<p><span class="label">长期记忆:</span> ${data.enable_long_term_memory ? '✅ 启用' : '❌ 禁用'}</p>`;
-            html += `<p><span class="label">认知增强:</span> ${data.enable_knowledge_base ? '✅ 启用' : '❌ 禁用'}</p>`;
-            html += `</div>`;
-            
-            // 短期记忆
-            html += `<div class="context-section">`;
-            html += `<h3>短期记忆 (${data.short_term_memory.length}/10)</h3>`;
-            if (data.short_term_memory.length === 0) {
-                html += `<p style="color: #999;">暂无短期记忆</p>`;
-            } else {
-                data.short_term_memory.forEach((conv, index) => {
-                    html += `<div class="memory-item">`;
-                    html += `<div class="timestamp">${new Date(conv.timestamp).toLocaleString()}</div>`;
-                    html += `<div class="user-message">老师: ${escapeHtml(conv.user_message)}</div>`;
-                    html += `<div class="assistant-message">学生: ${escapeHtml(conv.student_response.substring(0, 100))}${conv.student_response.length > 100 ? '...' : ''}</div>`;
-                    html += `</div>`;
-                });
-            }
-            html += `</div>`;
-            
-            // 长期记忆
-            html += `<div class="context-section">`;
-            html += `<h3>长期记忆</h3>`;
-            if (data.long_term_context && data.long_term_context !== '长期记忆功能已禁用或未创建线程。' && data.long_term_context !== '没有找到相关的长期记忆。') {
-                html += `<p style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.long_term_context.substring(0, 500))}${data.long_term_context.length > 500 ? '...' : ''}</p>`;
-            } else {
-                html += `<p style="color: #999;">${data.long_term_context || '暂无长期记忆'}</p>`;
-            }
-            html += `</div>`;
-            
-            contextInfo.innerHTML = html;
+
+        if (!data.success || !Array.isArray(data.students)) {
+            return;
         }
+
+        const contextInfo = document.getElementById('contextInfo');
+        const html = data.students.map((student) => {
+            const shortTerm = Array.isArray(student.short_term_memory) ? student.short_term_memory : [];
+            const longTermText = student.long_term_context || '暂无长期记忆';
+            const longTermDisplay = longTermText.length > 500
+                ? `${longTermText.substring(0, 500)}...`
+                : longTermText;
+
+            const memories = shortTerm.length === 0
+                ? `<p style="color: #999;">暂无短期记忆</p>`
+                : shortTerm.map((conv) => {
+                    const studentResponse = (conv.student_response || '').toString();
+                    const trimmedResponse = studentResponse.length > 100
+                        ? `${studentResponse.substring(0, 100)}...`
+                        : studentResponse;
+                    const teacherMessage = (conv.user_message || '').toString();
+                    const speakerName = conv.student_name || student.student_name || '学生';
+                    return `
+                    <div class="memory-item">
+                        <div class="timestamp">${new Date(conv.timestamp).toLocaleString()}</div>
+                        <div class="user-message">老师：${escapeHtml(teacherMessage)}</div>
+                        <div class="assistant-message">学生（${escapeHtml(speakerName)}）：${escapeHtml(trimmedResponse)}</div>
+                    </div>
+                `;
+                }).join('');
+
+            return `
+                <div class="context-section">
+                    <h3>${escapeHtml(student.student_name || '学生')}</h3>
+                    <p><span class="label">长期记忆:</span> ${student.enable_long_term_memory ? '✅ 启用' : '❌ 禁用'}</p>
+                    <p><span class="label">认知增强:</span> ${student.enable_knowledge_base ? '✅ 启用' : '❌ 禁用'}</p>
+                    <div class="context-subsection">
+                        <h4>短期记忆 (${shortTerm.length}/10)</h4>
+                        ${memories}
+                    </div>
+                    <div class="context-subsection">
+                        <h4>长期记忆</h4>
+                        <p style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(longTermDisplay)}</p>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        contextInfo.innerHTML = html;
     } catch (error) {
         console.error('更新上下文错误:', error);
     }
@@ -283,6 +543,7 @@ function updateStatus(message, type) {
     const statusDiv = document.getElementById('status');
     statusDiv.textContent = message;
     statusDiv.className = `status ${type}`;
+    statusDiv.style.display = 'block';
     
     if (type === 'success') {
         setTimeout(() => {
@@ -297,6 +558,8 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+initializeStudentSelector();
 
 // 回车发送消息
 document.getElementById('messageInput').addEventListener('keypress', function(e) {
