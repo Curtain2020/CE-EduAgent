@@ -4,6 +4,7 @@
 """
 
 from .settings import load_environment, console
+from . import settings
 
-__all__ = ['load_environment', 'console']
+__all__ = ['load_environment', 'console', 'settings']
 

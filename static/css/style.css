@@ -196,6 +196,23 @@ body {
     cursor: pointer;
 }
 
+.student-positivity-control {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: stretch;
+    flex: 1;
+}
+
+.student-positivity-text {
+    font-size: 12px;
+    color: #586069;
+}
+
+.student-positivity-slider {
+    width: 100%;
+}
+
 .student-selector-actions {
     display: flex;
     gap: 10px;
@@ -295,11 +312,64 @@ body {
     border-radius: 18px 18px 18px 4px;
 }
 
+.message.system .message-content {
+    background: #e7f5ff;
+    border: 1px solid #a5d8ff;
+    color: #1c7ed6;
+}
+
 .message-content {
     max-width: 70%;
     padding: 12px 16px;
     word-wrap: break-word;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.state-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.state-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: #eef2ff;
+    font-size: 12px;
+    color: #364fc7;
+}
+
+.classroom-state {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px dashed #d0d7ff;
+    padding-top: 8px;
+}
+
+.classroom-state-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #f8f9ff;
+}
+
+.classroom-state-name {
+    font-weight: 600;
+    color: #1c7ed6;
+}
+
+.classroom-state-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .message-header {
@@ -512,6 +582,35 @@ body {
     color: #333;
     margin-bottom: 6px;
     font-weight: 600;
+}
+
+.positivity-control {
+    background: #fff;
+    border: 1px dashed #ccd5f6;
+    border-radius: 6px;
+    padding: 10px;
+}
+
+.positivity-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.positivity-value {
+    font-weight: 600;
+    color: #1c7ed6;
+}
+
+.positivity-hint {
+    font-size: 12px;
+    color: #888;
+}
+
+.positivity-control input[type="range"] {
+    width: 100%;
 }
 
 .memory-item {

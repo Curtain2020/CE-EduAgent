@@ -4,15 +4,18 @@
 """
 
 import uuid
-from typing import List, Optional
+import random
+import time
+from typing import List, Optional, Callable, Awaitable
 from zep_cloud.client import AsyncZep
 
-from ..config.settings import load_environment, console
+from ..config.settings import load_environment, console, ENABLE_VR, VR_CLASSROOM_ID
 from ..memory.short_term_memory import ShortTermMemoryManager
 from ..api.qwen_client import QwenAPIClient
 from .system_prompts import get_system_prompt, get_tool_definitions
 from ..tools.zep_tools import create_zep_tools
 from ..tools.knowledge_tools import create_knowledge_tools
+from ..services.vr_client import send_to_vr
 
 
 class VirtualStudent:
@@ -30,10 +33,28 @@ class VirtualStudent:
     4. 提供工具管理和提示词管理
     """
     
+    ACTION_STATES = {
+        "raiseHand",
+        "sitProperly",
+        "standUp",
+        "sitDown",
+    }
+    DEFAULT_ACTION_STATE = "sitProperly"
+
+    EXPRESSION_STATES = {
+        "calm",
+        "dazed",
+        "smile",
+    }
+    DEFAULT_EXPRESSION_STATE = "calm"
+    
     def __init__(self, 
                  student_name: str = "崔展豪",
                  enable_long_term_memory: bool = True,
-                 enable_knowledge_base: bool = False):
+                 enable_knowledge_base: bool = False,
+                 positivity: float = 0.5,
+                 action_state: str = DEFAULT_ACTION_STATE,
+                 expression_state: str = DEFAULT_EXPRESSION_STATE):
         """初始化虚拟学生
         
         Args:
@@ -57,6 +78,12 @@ class VirtualStudent:
         self.student_name = student_name
         self.enable_long_term_memory = enable_long_term_memory
         self.enable_knowledge_base = enable_knowledge_base
+        self.positivity = self._clamp_positivity(positivity)
+        self.action_state = self._normalize_action_state(action_state)
+        self.expression_state = self._normalize_expression_state(expression_state)
+        self.last_action_ts = time.time()
+        self.enable_vr = ENABLE_VR
+        self.vr_classroom_id = VR_CLASSROOM_ID
         
         # 学生ID和线程ID（在创建用户和线程后设置）
         self.student_id: Optional[str] = None
@@ -140,7 +167,8 @@ class VirtualStudent:
         return get_system_prompt(
             context_info, 
             enable_knowledge_base=self.enable_knowledge_base,
-            enable_long_term_memory=self.enable_long_term_memory
+            enable_long_term_memory=self.enable_long_term_memory,
+            positivity=self.positivity
         )
     
     # ========== Memory（记忆管理） ==========
@@ -356,4 +384,92 @@ class VirtualStudent:
             enable: 是否启用
         """
         self.enable_knowledge_base = enable
+
+    def _clamp_positivity(self, value: float) -> float:
+        """将积极性限制在0-1范围内"""
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.5
+
+    def set_positivity(self, value: float):
+        """更新学生积极性（0-1）"""
+        self.positivity = self._clamp_positivity(value)
+        self.last_action_ts = time.time()
+
+    def _normalize_action_state(self, value: str) -> str:
+        if isinstance(value, str) and value in self.ACTION_STATES:
+            return value
+        return self.DEFAULT_ACTION_STATE
+
+    def set_action_state(self, value: str):
+        """更新学生动作状态"""
+        self.action_state = self._normalize_action_state(value)
+        self.last_action_ts = time.time()
+
+    def _normalize_expression_state(self, value: str) -> str:
+        if isinstance(value, str) and value in self.EXPRESSION_STATES:
+            return value
+        return self.DEFAULT_EXPRESSION_STATE
+
+    def set_expression_state(self, value: str):
+        """更新学生表情状态"""
+        self.expression_state = self._normalize_expression_state(value)
+        self.last_action_ts = time.time()
+
+    def _send_vr_event(self, action: str, expression: Optional[str] = None, speech: str = ""):
+        if not self.enable_vr:
+            return
+        try:
+            send_to_vr(
+                student_name=self.student_name,
+                action=action,
+                expression=expression or self.expression_state,
+                speech=speech,
+                classroom_id=self.vr_classroom_id
+            )
+        except Exception as exc:
+            console.print(f"[yellow]发送VR事件失败: {exc}[/yellow]")
+
+    def raise_hand(self, probability: Optional[float] = None) -> bool:
+        """根据概率举手"""
+        if probability is None:
+            probability = self.positivity
+        try:
+            probability = float(probability)
+        except (TypeError, ValueError):
+            probability = self.positivity
+        probability = max(0.0, min(1.0, probability))
+        if random.random() < probability:
+            self.set_action_state("raiseHand")
+            self._send_vr_event("raiseHand")
+            return True
+        return False
+
+    def sit_down(self):
+        """学生坐下"""
+        self.set_action_state("sitDown")
+        self._send_vr_event("sitDown")
+        self.set_action_state("sitProperly")
+        self._send_vr_event("sitProperly")
+
+    async def stand_up_and_speak(
+        self,
+        user_message: str,
+        processor: Callable[['VirtualStudent', str], Awaitable[dict]]
+    ) -> dict:
+        """起立发言"""
+        self.set_action_state("standUp")
+        self._send_vr_event("standUp")
+        if not callable(processor):
+            raise ValueError("processor must be a callable coroutine")
+        result = await processor(self, user_message)
+        if isinstance(result, dict):
+            speech = result.get('response') or ''
+            if speech:
+                self._send_vr_event("standUp", speech=speech)
+        # 将当前状态附加到结果，便于前端展示
+        result['action_state'] = self.action_state
+        result['expression_state'] = self.expression_state
+        return result
 

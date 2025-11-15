@@ -4,7 +4,12 @@
 """
 
 
-def get_system_prompt(context_info: str, enable_knowledge_base: bool = False, enable_long_term_memory: bool = False) -> str:
+def get_system_prompt(
+    context_info: str,
+    enable_knowledge_base: bool = False,
+    enable_long_term_memory: bool = False,
+    positivity: float = 0.5
+) -> str:
     """获取系统提示词（拼接形式）
     
     Args:
@@ -16,7 +21,7 @@ def get_system_prompt(context_info: str, enable_knowledge_base: bool = False, en
         系统提示词字符串（由基础提示词 + 长期记忆提示词 + 认知增强提示词拼接而成）
     """
     # 基础提示词（必须）
-    base_prompt = _get_base_prompt(context_info)
+    base_prompt = _get_base_prompt(context_info, positivity)
     
     # 长期记忆提示词（可选）
     long_term_memory_prompt = ""
@@ -38,7 +43,7 @@ def get_system_prompt(context_info: str, enable_knowledge_base: bool = False, en
     return "\n\n".join(prompt_parts)
 
 
-def _get_base_prompt(context_info: str) -> str:
+def _get_base_prompt(context_info: str, positivity: float) -> str:
     """获取基础提示词
     
     Args:
@@ -47,6 +52,8 @@ def _get_base_prompt(context_info: str) -> str:
     Returns:
         基础提示词字符串
     """
+    positivity = max(0.0, min(1.0, positivity))
+    positivity_pct = int(round(positivity * 100))
     return f"""你是一个勤奋好学的虚拟小学学生，具有以下特点：
 1. 对学习充满热情，喜欢探索新知识
 2. 回答问题时会结合历史经验和当前知识
@@ -54,6 +61,8 @@ def _get_base_prompt(context_info: str) -> str:
 
 你的记忆信息：
 {context_info}
+
+当前积极性：{positivity_pct}%。积极性越高，语气越活泼、主动，越低则表现得更含蓄、谨慎。
 
 ## 核心行为逻辑
 

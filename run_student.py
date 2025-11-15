@@ -5,7 +5,8 @@ Flask Web应用 - 虚拟学生对话系统
 
 import json
 import asyncio
-from typing import Dict, List, Any
+import re
+from typing import Dict, List, Any, Optional, Tuple
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_cors import CORS
 import sys
@@ -22,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.student.virtual_student import VirtualStudent
 from src.api.qwen_client import QwenAPIClient
-from src.config.settings import console
+from src.config.settings import console, ENABLE_VR
 from src.services.funasr_ws import transcribe_audio, parse_chunk_sizes, FunASRClientError, TranscriptionResult
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
@@ -33,10 +34,27 @@ CORS(app)
 
 # 支持的学生名单
 ALLOWED_STUDENTS = ["崔展豪", "李昌龙", "包梓群", "丽娃", "张晓丹", "萧华诗"]
+DEFAULT_POSITIVITY = 0.5
+
+ACTION_STATES = {"raiseHand", "sitProperly", "standUp", "sitDown"}
+DEFAULT_ACTION_STATE = "sitProperly"
+
+EXPRESSION_STATES = {"calm", "dazed", "smile"}
+DEFAULT_EXPRESSION_STATE = "calm"
+
+INTENT_CONTINUE = "continue"
+INTENT_QUESTION = "question"
+INTENT_CALL = "call"
+INTENT_SIT_DOWN = "sit_down"
+SUPPORTED_INTENTS = {INTENT_CONTINUE, INTENT_QUESTION, INTENT_CALL, INTENT_SIT_DOWN}
 
 # 全局虚拟学生实例集合
 current_students: Dict[str, VirtualStudent] = {}
 active_student_names: List[str] = []
+vr_control_enabled = ENABLE_VR
+
+# 意图识别客户端
+intent_detection_client = QwenAPIClient()
 
 # 语音识别配置
 FUNASR_HOST = os.environ.get("FUNASR_HOST", "59.78.189.185")
@@ -52,6 +70,237 @@ FUNASR_SEND_WITHOUT_SLEEP = bool(int(os.environ.get("FUNASR_SEND_WITHOUT_SLEEP",
 
 UPLOAD_ROOT = Path(os.environ.get("AUDIO_UPLOAD_DIR", Path(__file__).parent / "uploads"))
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def normalize_positivity(value, default: float = DEFAULT_POSITIVITY) -> float:
+    """将积极性限制在0-1范围"""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(1.0, num))
+
+
+def normalize_action_state(value: str, default: str = DEFAULT_ACTION_STATE) -> str:
+    if isinstance(value, str) and value in ACTION_STATES:
+        return value
+    return default
+
+
+def normalize_expression_state(value: str, default: str = DEFAULT_EXPRESSION_STATE) -> str:
+    if isinstance(value, str) and value in EXPRESSION_STATES:
+        return value
+    return default
+
+
+def extract_student_name(text: str) -> Optional[str]:
+    if not text:
+        return None
+    best_match = None
+    best_score = 0
+    for name in ALLOWED_STUDENTS:
+        score = sum(1 for ch in name if ch and ch in text)
+        if score > best_score:
+            best_score = score
+            best_match = name
+    return best_match if best_score > 0 else None
+
+
+def detect_intent_by_rule(text: str) -> Optional[str]:
+    if not text:
+        return None
+    lowered = text.lower()
+    if any(keyword in lowered for keyword in ["坐下", "回座", "sit down", "坐回去"]):
+        return INTENT_SIT_DOWN
+    name_in_text = extract_student_name(text)
+    if name_in_text and re.search(r"(点名|请.?回答|请.?发言|来回答|回答|发言)", text):
+        return INTENT_CALL
+    if any(keyword in lowered for keyword in ["提问", "问题", "回答", "谁知道", "想问"]) or text.strip().endswith(("?", "？")):
+        return INTENT_QUESTION
+    return None
+
+
+async def _detect_intent_via_llm(message: str) -> Optional[str]:
+    prompt = (
+        "你是课堂助手，请根据老师的一句话判断意图，仅可从"
+        f"{list(SUPPORTED_INTENTS)}中选择一个，并以JSON格式返回，示例：{{\"intent\": \"question\"}}。"
+        "若难以判断请输出{\"intent\": \"continue\"}。老师的话："
+    )
+    try:
+        completion = await intent_detection_client.chat_completion(
+            [
+                {"role": "system", "content": "你是课堂助手，负责提取老师意图。"},
+                {"role": "user", "content": f"{prompt}{message}"}
+            ],
+            temperature=0.1
+        )
+    except Exception as exc:
+        console.print(f"[yellow]LLM意图识别失败: {exc}[/yellow]")
+        return None
+
+    content = (completion.get('content') or "").strip()
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+
+    intent = data.get("intent")
+    if isinstance(intent, str) and intent in SUPPORTED_INTENTS:
+        return intent
+    return None
+
+
+def detect_intent(message: str) -> Tuple[str, Optional[str], str]:
+    student_name = extract_student_name(message)
+    intent = detect_intent_by_rule(message)
+    source = "rule"
+
+    if intent is None:
+        llm_intent = run_async(_detect_intent_via_llm(message))
+        if llm_intent:
+            intent = llm_intent
+            source = "llm"
+        else:
+            intent = INTENT_CONTINUE
+    return intent, student_name, source
+
+
+def get_students_by_action(action: str) -> List[VirtualStudent]:
+    return [
+        student for student in current_students.values()
+        if getattr(student, "action_state", DEFAULT_ACTION_STATE) == action
+    ]
+
+
+def get_standing_student() -> Optional[VirtualStudent]:
+    standing = get_students_by_action("standUp")
+    return standing[0] if standing else None
+
+
+def get_raising_students() -> List[VirtualStudent]:
+    return get_students_by_action("raiseHand")
+
+
+def clear_raise_states(exclude: Optional[str] = None):
+    for student in current_students.values():
+        if student.action_state == "raiseHand" and student.student_name != exclude:
+            student.set_action_state(DEFAULT_ACTION_STATE)
+
+
+def reset_other_standing(active_student_name: str):
+    for student in current_students.values():
+        if student.student_name != active_student_name and student.action_state == "standUp":
+            student.set_action_state(DEFAULT_ACTION_STATE)
+
+
+def record_teacher_statement(message: str):
+    for student in current_students.values():
+        try:
+            run_async(student.add_conversation_to_memory(message, "【课堂记录】"))
+        except Exception as exc:
+            console.print(f"[yellow]记录老师讲课失败: {exc}[/yellow]")
+
+
+def build_wait_response(intent: str, action: str, message: str) -> dict:
+    return {
+        'success': True,
+        'intent': intent,
+        'action': action,
+        'message': message,
+        'responses': [],
+        'response': message,
+        'students_state': get_students_state_snapshot()
+    }
+
+
+def trigger_student_stand_and_speak(student: VirtualStudent, user_message: str) -> dict:
+    reset_other_standing(student.student_name)
+    clear_raise_states(exclude=student.student_name)
+    return run_async(student.stand_up_and_speak(user_message, _process_chat_for_student))
+
+
+def attempt_students_raise() -> List[VirtualStudent]:
+    raised_students = []
+    for student in current_students.values():
+        if student.action_state in ("standUp", "raiseHand"):
+            continue
+        if student.raise_hand():
+            raised_students.append(student)
+    return raised_students
+
+
+def get_students_state_snapshot() -> List[dict]:
+    states = []
+    for student in current_students.values():
+        states.append({
+            'student_name': student.student_name,
+            'action_state': getattr(student, 'action_state', DEFAULT_ACTION_STATE),
+            'expression_state': getattr(student, 'expression_state', DEFAULT_EXPRESSION_STATE)
+        })
+    return states
+
+
+def build_response_with_results(intent: str, action: str, responses: List[dict]) -> dict:
+    success = all(item.get('success', True) for item in responses)
+    primary_response = next(
+        (item.get('response') for item in responses if item.get('success')),
+        ''
+    )
+    return {
+        'success': success,
+        'intent': intent,
+        'action': action,
+        'responses': responses,
+        'response': primary_response,
+        'students_state': get_students_state_snapshot()
+    }
+
+
+def handle_continue_intent(user_message: str) -> dict:
+    return build_wait_response(INTENT_CONTINUE, 'recorded', '已记录老师讲课内容。')
+
+
+def handle_question_intent(user_message: str, named_student: Optional[str]) -> dict:
+    standing_student = get_standing_student()
+    if standing_student:
+        result = trigger_student_stand_and_speak(standing_student, user_message)
+        return build_response_with_results(INTENT_QUESTION, 'standing_answer', [result])
+
+    raising_students = get_raising_students()
+    if named_student:
+        target_student = current_students.get(named_student)
+        if target_student:
+            result = trigger_student_stand_and_speak(target_student, user_message)
+            return build_response_with_results(INTENT_QUESTION, 'called_student', [result])
+        return build_wait_response(INTENT_QUESTION, 'student_not_found', f"未找到学生 {named_student}")
+
+    if not raising_students:
+        raising_students = attempt_students_raise()
+        if not raising_students:
+            return build_wait_response(INTENT_QUESTION, 'waiting', '老师提问，等待学生举手。')
+
+    return build_wait_response(INTENT_QUESTION, 'awaiting_call', '有学生举手，等待老师点名。')
+
+
+def handle_call_intent(user_message: str, named_student: Optional[str]) -> dict:
+    if not named_student:
+        return handle_question_intent(user_message, None)
+
+    target_student = current_students.get(named_student)
+    if not target_student:
+        return build_wait_response(INTENT_CALL, 'student_not_found', f"未找到学生 {named_student}")
+
+    result = trigger_student_stand_and_speak(target_student, user_message)
+    return build_response_with_results(INTENT_CALL, 'called_student', [result])
+
+
+def handle_sit_down_intent(_: str) -> dict:
+    standing_student = get_standing_student()
+    if not standing_student:
+        return build_wait_response(INTENT_SIT_DOWN, 'no_standing', '当前没有学生起立。')
+
+    standing_student.sit_down()
+    return build_wait_response(INTENT_SIT_DOWN, 'student_sat', f"{standing_student.student_name} 已坐下。")
 
 
 def clear_uploads_directory():
@@ -124,7 +373,10 @@ def init_student():
                 validated_configs.append({
                     'student_name': name,
                     'enable_long_term_memory': bool(item.get('enable_long_term_memory', True)),
-                    'enable_knowledge_base': bool(item.get('enable_knowledge_base', False))
+                    'enable_knowledge_base': bool(item.get('enable_knowledge_base', False)),
+                    'positivity': normalize_positivity(item.get('positivity', DEFAULT_POSITIVITY)),
+                    'action_state': normalize_action_state(item.get('action_state', DEFAULT_ACTION_STATE)),
+                    'expression_state': normalize_expression_state(item.get('expression_state', DEFAULT_EXPRESSION_STATE))
                 })
         else:
             # 向后兼容旧版单学生初始化
@@ -145,11 +397,17 @@ def init_student():
                 }), 400
             enable_long_term_memory = bool(data.get('enable_long_term_memory', True))
             enable_knowledge_base = bool(data.get('enable_knowledge_base', False))
+            default_positivity = normalize_positivity(data.get('positivity', DEFAULT_POSITIVITY))
+            default_action_state = normalize_action_state(data.get('action_state', DEFAULT_ACTION_STATE))
+            default_expression_state = normalize_expression_state(data.get('expression_state', DEFAULT_EXPRESSION_STATE))
             validated_configs = [
                 {
                     'student_name': name,
                     'enable_long_term_memory': enable_long_term_memory,
-                    'enable_knowledge_base': enable_knowledge_base
+                    'enable_knowledge_base': enable_knowledge_base,
+                    'positivity': default_positivity,
+                    'action_state': default_action_state,
+                    'expression_state': default_expression_state
                 }
                 for name in student_names
             ]
@@ -171,13 +429,20 @@ def init_student():
             student = VirtualStudent(
                 student_name=name,
                 enable_long_term_memory=cfg['enable_long_term_memory'],
-                enable_knowledge_base=cfg['enable_knowledge_base']
+                enable_knowledge_base=cfg['enable_knowledge_base'],
+                positivity=cfg['positivity'],
+                action_state=cfg['action_state'],
+                expression_state=cfg['expression_state']
             )
+            student.enable_vr = vr_control_enabled
 
             student_id = run_async(student.create_student_user())
             thread_id = run_async(student.create_study_thread())
             if not student_id or not thread_id:
                 raise RuntimeError(f"{name} 创建学生用户或线程失败")
+
+            if student.enable_vr:
+                student._send_vr_event(student.action_state)
 
             current_students[name] = student
             active_student_names.append(name)
@@ -185,6 +450,9 @@ def init_student():
                 'student_name': name,
                 'enable_long_term_memory': cfg['enable_long_term_memory'],
                 'enable_knowledge_base': cfg['enable_knowledge_base'],
+                'positivity': student.positivity,
+                'action_state': student.action_state,
+                'expression_state': student.expression_state,
                 'student_id': student_id,
                 'thread_id': thread_id
             })
@@ -208,7 +476,7 @@ def init_student():
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    """发送消息并获取回复，支持多学生并行"""
+    """发送消息并根据课堂流程处理意图"""
     if not active_student_names:
         return jsonify({
             'success': False,
@@ -225,48 +493,24 @@ def chat():
                 'error': '消息不能为空'
             }), 400
 
-        requested_names = data.get('student_names')
-        if requested_names and isinstance(requested_names, list):
-            target_names = [name for name in requested_names if name in current_students]
-            if not target_names:
-                return jsonify({
-                    'success': False,
-                    'error': '未找到目标学生'
-                }), 400
+        record_teacher_statement(user_message)
+        intent, named_student, intent_source = detect_intent(user_message)
+
+        if intent == INTENT_CONTINUE:
+            payload = handle_continue_intent(user_message)
+        elif intent == INTENT_QUESTION:
+            payload = handle_question_intent(user_message, named_student)
+        elif intent == INTENT_CALL:
+            payload = handle_call_intent(user_message, named_student)
+        elif intent == INTENT_SIT_DOWN:
+            payload = handle_sit_down_intent(user_message)
         else:
-            target_names = list(active_student_names)
+            payload = build_wait_response(INTENT_CONTINUE, 'unhandled', '未能识别老师意图，默认记录。')
 
-        async def process_all():
-            tasks = [
-                _process_chat_for_student(current_students[name], user_message)
-                for name in target_names
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            payload = []
-            for name, result in zip(target_names, results):
-                if isinstance(result, Exception):
-                    console.print(f"[red]{name} 对话失败: {result}[/red]")
-                    payload.append({
-                        'student_name': name,
-                        'success': False,
-                        'error': str(result)
-                    })
-                else:
-                    payload.append(result)
-            return payload
-
-        responses = run_async(process_all())
-        overall_success = all(item.get('success') for item in responses)
-        primary_response = next(
-            (item.get('response') for item in responses if item.get('success')),
-            ''
-        )
-
-        return jsonify({
-            'success': overall_success,
-            'responses': responses,
-            'response': primary_response
-        })
+        payload['intent'] = intent
+        payload['named_student'] = named_student
+        payload['intent_source'] = intent_source
+        return jsonify(payload)
 
     except Exception as e:
         console.print(f"[red]对话处理失败: {e}[/red]")
@@ -507,6 +751,8 @@ async def _process_chat_for_student(student: VirtualStudent, user_message: str):
         result['response']
     )
 
+    result['action_state'] = getattr(student, 'action_state', DEFAULT_ACTION_STATE)
+    result['expression_state'] = getattr(student, 'expression_state', DEFAULT_EXPRESSION_STATE)
     return result
 
 
@@ -536,7 +782,10 @@ def get_context():
                 'long_term_context': long_term_context,
                 'full_context': full_context,
                 'enable_long_term_memory': student.enable_long_term_memory,
-                'enable_knowledge_base': student.enable_knowledge_base
+                'enable_knowledge_base': student.enable_knowledge_base,
+                'positivity': student.positivity,
+                'action_state': student.action_state,
+                'expression_state': student.expression_state
             })
 
         return jsonify({
@@ -550,6 +799,105 @@ def get_context():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/settings/vr', methods=['GET', 'POST'])
+def vr_settings():
+    """获取或设置数字人控制开关"""
+    global vr_control_enabled
+    if request.method == 'GET':
+        return jsonify({
+            'success': True,
+            'enabled': vr_control_enabled
+        })
+
+    data = request.json or {}
+    if 'enabled' not in data:
+        return jsonify({
+            'success': False,
+            'error': '缺少enabled字段'
+        }), 400
+
+    enabled = data.get('enabled')
+    if isinstance(enabled, str):
+        enabled = enabled.lower() in ('1', 'true', 'yes', 'on')
+    else:
+        enabled = bool(enabled)
+
+    vr_control_enabled = enabled
+    for student in current_students.values():
+        student.enable_vr = enabled
+
+    return jsonify({
+        'success': True,
+        'enabled': vr_control_enabled
+    })
+
+
+@app.route('/api/students/<student_name>/positivity', methods=['POST'])
+def update_positivity(student_name: str):
+    """更新指定学生的积极性"""
+    if student_name not in current_students:
+        return jsonify({
+            'success': False,
+            'error': '学生未初始化'
+        }), 404
+
+    data = request.json or {}
+    if 'positivity' not in data:
+        return jsonify({
+            'success': False,
+            'error': '缺少positivity字段'
+        }), 400
+
+    student = current_students[student_name]
+    value = normalize_positivity(
+        data.get('positivity'),
+        student.positivity if hasattr(student, 'positivity') else DEFAULT_POSITIVITY
+    )
+    student.set_positivity(value)
+
+    return jsonify({
+        'success': True,
+        'student_name': student_name,
+        'positivity': student.positivity
+    })
+
+
+@app.route('/api/students/<student_name>/action', methods=['POST'])
+def update_action_state(student_name: str):
+    """更新学生动作状态"""
+    student = current_students.get(student_name)
+    if not student:
+        return jsonify({'success': False, 'error': '学生未初始化'}), 404
+
+    data = request.json or {}
+    action_state = normalize_action_state(data.get('action_state'))
+    student.set_action_state(action_state)
+
+    return jsonify({
+        'success': True,
+        'student_name': student_name,
+        'action_state': student.action_state
+    })
+
+
+@app.route('/api/students/<student_name>/expression', methods=['POST'])
+def update_expression_state(student_name: str):
+    """更新学生表情状态"""
+    student = current_students.get(student_name)
+    if not student:
+        return jsonify({'success': False, 'error': '学生未初始化'}), 404
+
+    data = request.json or {}
+    expression_state = normalize_expression_state(data.get('expression_state'))
+    student.set_expression_state(expression_state)
+
+    return jsonify({
+        'success': True,
+        'student_name': student_name,
+        'expression_state': student.expression_state
+    })
 
 
 @app.route('/api/speech/transcribe', methods=['POST'])

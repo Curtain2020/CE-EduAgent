@@ -35,3 +35,18 @@ def load_environment():
         'QWEN_MODEL': os.getenv('QWEN_MODEL', 'qwen-max')
     }
 
+
+RABBITMQ_CONFIG = {
+    "host": os.getenv("RABBITMQ_HOST", "59.78.189.134"),
+    "port": int(os.getenv("RABBITMQ_PORT", "31028")),
+    "username": os.getenv("RABBITMQ_USERNAME", "rabbitmqAdmin"),
+    "password": os.getenv("RABBITMQ_PASSWORD", "password"),
+    "exchange": os.getenv("RABBITMQ_EXCHANGE", "web.push.exchange"),
+    "routing_key": os.getenv("RABBITMQ_ROUTING_KEY", "web.push.key"),
+    "virtual_host": os.getenv("RABBITMQ_VHOST", "/")
+}
+
+
+ENABLE_VR = bool(int(os.getenv("ENABLE_VR", "1")))
+VR_CLASSROOM_ID = os.getenv("VR_CLASSROOM_ID", "2")
+

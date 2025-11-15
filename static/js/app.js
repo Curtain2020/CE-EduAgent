@@ -2,14 +2,41 @@
 let isInitialized = false;
 let isLoading = false;
 let activeStudents = [];
+let vrControlEnabled = true;
 const allowedStudents = [
-    { name: '崔展豪', enableLongTermMemory: true, enableKnowledgeBase: false },
-    { name: '李昌龙', enableLongTermMemory: true, enableKnowledgeBase: false },
-    { name: '包梓群', enableLongTermMemory: true, enableKnowledgeBase: false },
-    { name: '丽娃', enableLongTermMemory: true, enableKnowledgeBase: false },
-    { name: '张晓丹', enableLongTermMemory: true, enableKnowledgeBase: false },
-    { name: '萧华诗', enableLongTermMemory: true, enableKnowledgeBase: false }
+    { name: '崔展豪', enableLongTermMemory: true, enableKnowledgeBase: false, positivity: 0.5 },
+    { name: '李昌龙', enableLongTermMemory: true, enableKnowledgeBase: false, positivity: 0.5 },
+    { name: '包梓群', enableLongTermMemory: true, enableKnowledgeBase: false, positivity: 0.5 },
+    { name: '丽娃', enableLongTermMemory: true, enableKnowledgeBase: false, positivity: 0.5 },
+    { name: '张晓丹', enableLongTermMemory: true, enableKnowledgeBase: false, positivity: 0.5 },
+    { name: '萧华诗', enableLongTermMemory: true, enableKnowledgeBase: false, positivity: 0.5 }
 ];
+
+const ACTION_EMOJIS = {
+    raiseHand: '🙋',
+    sitProperly: '🧒',
+    standUp: '🧍',
+    sitDown: '🪑'
+};
+
+const ACTION_LABELS = {
+    raiseHand: '举手',
+    sitProperly: '端坐',
+    standUp: '起立',
+    sitDown: '坐下'
+};
+
+const EXPRESSION_EMOJIS = {
+    calm: '😐',
+    dazed: '😵',
+    smile: '😊'
+};
+
+const EXPRESSION_LABELS = {
+    calm: '平静',
+    dazed: '呆滞',
+    smile: '微笑'
+};
 
 let studentConfigs = {};
 let activeStudentConfigs = {};
@@ -28,7 +55,8 @@ function initializeStudentSelector() {
         studentConfigs[student.name] = {
             selected: false,
             enableLongTermMemory: student.enableLongTermMemory,
-            enableKnowledgeBase: student.enableKnowledgeBase
+            enableKnowledgeBase: student.enableKnowledgeBase,
+            positivity: typeof student.positivity === 'number' ? student.positivity : 0.5
         };
 
         const itemEl = document.createElement('div');
@@ -71,9 +99,31 @@ function initializeStudentSelector() {
         knowledgeLabel.appendChild(knowledgeCheckbox);
         knowledgeLabel.appendChild(document.createTextNode('认知增强'));
 
+        const positivityWrapper = document.createElement('div');
+        positivityWrapper.className = 'student-positivity-control';
+        const positivityLabel = document.createElement('span');
+        positivityLabel.className = 'student-positivity-text';
+        const initialPositivity = studentConfigs[student.name].positivity ?? 0.5;
+        positivityLabel.textContent = `积极性：${initialPositivity.toFixed(2)}`;
+        const positivitySlider = document.createElement('input');
+        positivitySlider.type = 'range';
+        positivitySlider.min = '0';
+        positivitySlider.max = '1';
+        positivitySlider.step = '0.01';
+        positivitySlider.value = initialPositivity;
+        positivitySlider.className = 'student-positivity-slider';
+        positivitySlider.addEventListener('input', (event) => {
+            const val = Number(event.target.value);
+            positivityLabel.textContent = `积极性：${val.toFixed(2)}`;
+            studentConfigs[student.name].positivity = val;
+        });
+        positivityWrapper.appendChild(positivityLabel);
+        positivityWrapper.appendChild(positivitySlider);
+
         itemEl.appendChild(nameLabel);
         itemEl.appendChild(longTermLabel);
         itemEl.appendChild(knowledgeLabel);
+        itemEl.appendChild(positivityWrapper);
         listEl.appendChild(itemEl);
     });
 
@@ -138,9 +188,11 @@ function setStudentSelectorEnabled(enabled) {
     const globalKnowledge = document.getElementById('globalEnableKnowledgeBase');
     const applyBtn = document.getElementById('applyGlobalBtn');
     const toggleBtn = document.getElementById('studentSelectorToggle');
+    const vrToggle = document.getElementById('vrControlToggle');
 
     if (globalLongTerm) globalLongTerm.disabled = !enabled;
     if (globalKnowledge) globalKnowledge.disabled = !enabled;
+    if (vrToggle) vrToggle.disabled = false;
     if (applyBtn) {
         applyBtn.dataset.locked = (!enabled).toString();
         applyBtn.disabled = !enabled;
@@ -154,6 +206,9 @@ function setStudentSelectorEnabled(enabled) {
     listEl.querySelectorAll('input[type="checkbox"]').forEach((input) => {
         input.disabled = !enabled;
     });
+    listEl.querySelectorAll('input[type="range"]').forEach((input) => {
+        input.disabled = !enabled;
+    });
 
     listEl.querySelectorAll('.student-item').forEach((item) => {
         item.classList.toggle('disabled', !enabled);
@@ -163,6 +218,54 @@ function setStudentSelectorEnabled(enabled) {
         updateApplyGlobalBtnState();
     }
     updateStudentPanelVisualState();
+}
+
+async function fetchVrControlState() {
+    try {
+        const response = await fetch('/api/settings/vr');
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || '获取失败');
+        }
+        vrControlEnabled = !!data.enabled;
+        const toggle = document.getElementById('vrControlToggle');
+        if (toggle) {
+            toggle.checked = vrControlEnabled;
+        }
+    } catch (error) {
+        console.error('获取数字人控制状态失败:', error);
+        updateStatus('获取数字人控制状态失败: ' + error.message, 'error');
+    }
+}
+
+async function handleVrToggleChange(event) {
+    const enabled = event.target.checked;
+    try {
+        const response = await fetch('/api/settings/vr', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ enabled })
+        });
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || '更新失败');
+        }
+        vrControlEnabled = !!data.enabled;
+        updateStatus(`数字人控制${vrControlEnabled ? '已开启' : '已关闭'}`, 'success');
+    } catch (error) {
+        console.error('设置数字人控制失败:', error);
+        event.target.checked = vrControlEnabled;
+        updateStatus('数字人控制切换失败: ' + error.message, 'error');
+    }
+}
+
+function initializeVrToggle() {
+    const toggle = document.getElementById('vrControlToggle');
+    if (!toggle) return;
+    toggle.addEventListener('change', handleVrToggleChange);
+    fetchVrControlState();
 }
 
 function toggleStudentPanel() {
@@ -185,7 +288,8 @@ function getSelectedStudentConfigs() {
         .map(([name, cfg]) => ({
             student_name: name,
             enable_long_term_memory: cfg.enableLongTermMemory,
-            enable_knowledge_base: cfg.enableKnowledgeBase
+            enable_knowledge_base: cfg.enableKnowledgeBase,
+            positivity: typeof cfg.positivity === 'number' ? cfg.positivity : 0.5
         }));
 }
 
@@ -227,7 +331,8 @@ async function initStudent() {
             configsFromServer.forEach((cfg) => {
                 activeStudentConfigs[cfg.student_name] = {
                     enable_long_term_memory: cfg.enable_long_term_memory,
-                    enable_knowledge_base: cfg.enable_knowledge_base
+                    enable_knowledge_base: cfg.enable_knowledge_base,
+                    positivity: typeof cfg.positivity === 'number' ? cfg.positivity : 0.5
                 };
             });
 
@@ -365,7 +470,6 @@ async function sendMessage() {
 
         const responses = Array.isArray(data.responses) ? data.responses : [];
         if (responses.length === 0 && data.response) {
-            // 兼容旧接口
             addMessage('assistant', data.response, {
                 senderName: activeStudents[0] || '学生'
             });
@@ -380,9 +484,22 @@ async function sendMessage() {
                 addMessage('assistant', item.response, {
                     senderName: item.student_name || '学生',
                     toolCalls: item.tool_calls,
-                    intermediateSteps: item.intermediate_steps
+                    intermediateSteps: item.intermediate_steps,
+                    actionState: item.action_state,
+                    expressionState: item.expression_state
                 });
             });
+        }
+
+        if (data.message) {
+            addMessage('system', data.message, {
+                senderName: '课堂助手',
+                studentsState: Array.isArray(data.students_state) ? data.students_state : []
+            });
+        }
+
+        if (data.intent || data.action) {
+            updateStatus(`意图：${data.intent || '未知'}，动作：${data.action || '无'}`, 'success');
         }
 
         // 更新上下文
@@ -411,7 +528,10 @@ function addMessage(type, content, options = {}) {
         isLoading = false,
         toolCalls = [],
         intermediateSteps = [],
-        senderName
+        senderName,
+        actionState,
+        expressionState,
+        studentsState = []
     } = options;
 
     const messagesContainer = document.getElementById('chatMessages');
@@ -434,8 +554,41 @@ function addMessage(type, content, options = {}) {
     } else {
         let html = `
             <div class="message-header">${escapeHtml(headerTitle)}</div>
-            <div>${escapeHtml(content)}</div>
         `;
+        if (actionState || expressionState) {
+            const badges = [];
+            if (actionState) {
+                const emoji = ACTION_EMOJIS[actionState] || '🎯';
+                const label = ACTION_LABELS[actionState] || actionState;
+                badges.push(`<span class="state-badge">${emoji} ${escapeHtml(label)}</span>`);
+            }
+            if (expressionState) {
+                const emoji = EXPRESSION_EMOJIS[expressionState] || '🙂';
+                const label = EXPRESSION_LABELS[expressionState] || expressionState;
+                badges.push(`<span class="state-badge">${emoji} ${escapeHtml(label)}</span>`);
+            }
+            html += `<div class="state-badges">${badges.join('')}</div>`;
+        }
+        html += `<div>${escapeHtml(content)}</div>`;
+        if (type === 'system' && studentsState && studentsState.length > 0) {
+            html += '<div class="classroom-state">';
+            studentsState.forEach((state) => {
+                const actionEmoji = ACTION_EMOJIS[state.action_state] || '🎯';
+                const actionLabel = ACTION_LABELS[state.action_state] || state.action_state;
+                const expressionEmoji = EXPRESSION_EMOJIS[state.expression_state] || '🙂';
+                const expressionLabel = EXPRESSION_LABELS[state.expression_state] || state.expression_state;
+                html += `
+                    <div class="classroom-state-item">
+                        <div class="classroom-state-name">${escapeHtml(state.student_name || '学生')}</div>
+                        <div class="classroom-state-badges">
+                            <span class="state-badge">${actionEmoji} ${escapeHtml(actionLabel)}</span>
+                            <span class="state-badge">${expressionEmoji} ${escapeHtml(expressionLabel)}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+        }
         
         // 添加工具调用信息
         if (toolCalls && toolCalls.length > 0) {
@@ -496,6 +649,10 @@ async function updateContext() {
             const longTermDisplay = longTermText.length > 500
                 ? `${longTermText.substring(0, 500)}...`
                 : longTermText;
+            const positivity = typeof student.positivity === 'number'
+                ? Math.min(1, Math.max(0, student.positivity))
+                : 0.5;
+            const positivityDisplay = positivity.toFixed(2);
 
             const memories = shortTerm.length === 0
                 ? `<p style="color: #999;">暂无短期记忆</p>`
@@ -520,6 +677,22 @@ async function updateContext() {
                     <h3>${escapeHtml(student.student_name || '学生')}</h3>
                     <p><span class="label">长期记忆:</span> ${student.enable_long_term_memory ? '✅ 启用' : '❌ 禁用'}</p>
                     <p><span class="label">认知增强:</span> ${student.enable_knowledge_base ? '✅ 启用' : '❌ 禁用'}</p>
+                    <div class="context-subsection positivity-control">
+                        <h4>积极性调节</h4>
+                        <div class="positivity-row">
+                            <label>当前值：<span class="positivity-value" data-student="${escapeHtml(student.student_name || '')}">${positivityDisplay}</span></label>
+                            <span class="positivity-hint">拖拽滑块可调整 0 - 1</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value="${positivity}"
+                            class="positivity-slider"
+                            data-student="${escapeHtml(student.student_name || '')}"
+                        >
+                    </div>
                     <div class="context-subsection">
                         <h4>短期记忆 (${shortTerm.length}/10)</h4>
                         ${memories}
@@ -533,8 +706,52 @@ async function updateContext() {
         }).join('');
 
         contextInfo.innerHTML = html;
+        bindPositivityControls();
     } catch (error) {
         console.error('更新上下文错误:', error);
+    }
+}
+
+function bindPositivityControls() {
+    const container = document.getElementById('contextInfo');
+    if (!container) return;
+    const sliders = container.querySelectorAll('.positivity-slider');
+    sliders.forEach((slider) => {
+        const studentName = slider.dataset.student;
+        const valueLabel = container.querySelector(`.positivity-value[data-student="${safeCssEscape(studentName)}"]`);
+        slider.addEventListener('input', (event) => {
+            if (valueLabel) {
+                valueLabel.textContent = Number(event.target.value).toFixed(2);
+            }
+        });
+        slider.addEventListener('change', (event) => {
+            const value = Number(event.target.value);
+            updateStudentPositivity(studentName, value);
+        });
+    });
+}
+
+async function updateStudentPositivity(studentName, value) {
+    if (!studentName) return;
+    try {
+        const response = await fetch(`/api/students/${encodeURIComponent(studentName)}/positivity`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ positivity: value })
+        });
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || '更新失败');
+        }
+        updateStatus(`已更新${studentName}的积极性为 ${value.toFixed(2)}`, 'success');
+        if (isInitialized) {
+            updateContext();
+        }
+    } catch (error) {
+        console.error('更新积极性失败:', error);
+        updateStatus(`${studentName}积极性更新失败: ${error.message}`, 'error');
     }
 }
 
@@ -559,7 +776,15 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function safeCssEscape(value = '') {
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+        return window.CSS.escape(value);
+    }
+    return String(value).replace(/([!"#$%&'()*+,.\/:;<=>?@\[\\\]^`{|}~])/g, '\\$1');
+}
+
 initializeStudentSelector();
+initializeVrToggle();
 
 // 回车发送消息
 document.getElementById('messageInput').addEventListener('keypress', function(e) {
@@ -788,3 +1013,4 @@ if (document.readyState === 'loading') {
 } else {
     initialiseSpeechControls();
 }
+
