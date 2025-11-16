@@ -553,6 +553,19 @@ function normalizeGraphForVis(nodes, edges) {
         } else if (typeof p.bloom_qa_pairs === 'string') {
             try { qaPairs = JSON.parse(p.bloom_qa_pairs) || []; } catch(e) { qaPairs = []; }
         }
+        // 统一 status 为三维向量（仅 0/1；1 保留为 1，其它→0）
+        const ensureStatusVector = (val) => {
+            const toBin = (x) => {
+                const v = parseInt(x, 10);
+                return v === 1 ? 1 : 0;
+            };
+            if (Array.isArray(val) && val.length === 3) {
+                return [toBin(val[0]), toBin(val[1]), toBin(val[2])];
+            }
+            const iv = (val === undefined || val === null) ? 0 : parseInt(val, 10);
+            return [toBin(iv), 0, 0];
+        };
+        const statusVec = ensureStatusVector(p.status);
         return {
             id: p.uuid || p.node_name || Math.random().toString(36).slice(2),
             uuid: p.uuid,
@@ -562,7 +575,7 @@ function normalizeGraphForVis(nodes, edges) {
             grade: p.grade,
             subject: p.subject,
             publisher: p.publisher,
-            status: typeof p.status === 'number' ? p.status : -1,
+            status: statusVec,
             bloom_qa_pairs: qaPairs
         };
     });
@@ -593,8 +606,21 @@ function diffGraphs(base, target) {
         } else {
             const bn = bNodes.get(id);
             const changedFields = [];
+            const deepEqualStatus = (a, b) => {
+                if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
+                    for (let i = 0; i < a.length; i++) {
+                        if (String(a[i]) !== String(b[i])) return false;
+                    }
+                    return true;
+                }
+                return String(a) === String(b);
+            };
             ['node_name','description','grade','subject','publisher','status'].forEach(k => {
-                if ((bn[k]||'') !== (tn[k]||'')) changedFields.push({field:k, from:bn[k], to:tn[k]});
+                if (k === 'status') {
+                    if (!deepEqualStatus(bn[k], tn[k])) changedFields.push({field:k, from:bn[k], to:tn[k]});
+                } else {
+                    if (String(bn[k]||'') !== String(tn[k]||'')) changedFields.push({field:k, from:bn[k], to:tn[k]});
+                }
             });
             if (changedFields.length) changedNodes.push({ node: tn, changes: changedFields });
         }
@@ -631,11 +657,24 @@ function renderDiffSummary(studentCN, stageA, stageB, diff) {
         const statusChange = (item.changes || []).find(ch => ch.field === 'status');
         if (!statusChange) return null;
         const node = item.node || {};
+        // 强化：将 "x,y,z" 或 单值 映射为三维向量或保持原值，便于后续比较
+        const toVec = (v) => {
+            if (Array.isArray(v)) return v;
+            if (typeof v === 'string') {
+                const parts = v.split(',').map(s => s.trim());
+                if (parts.length === 3 && parts.every(p => /^-?\d+$/.test(p))) {
+                    return parts.map(x => parseInt(x, 10));
+                }
+            }
+            return v;
+        };
+        const fromN = toVec(statusChange.from);
+        const toN = toVec(statusChange.to);
         return {
             grade: node.grade || '未分类',
             name: node.node_name || node.uuid || '',
-            from: statusChange.from,
-            to: statusChange.to
+            from: fromN,
+            to: toN
         };
     }).filter(Boolean);
 
@@ -656,7 +695,30 @@ function renderDiffSummary(studentCN, stageA, stageB, diff) {
         Object.keys(byGrade).sort().forEach(grade => {
             lines.push(`年级：${grade}`);
             byGrade[grade].forEach(e => {
-                lines.push(`  - 节点：${e.name}，status：${String(e.from)} → ${String(e.to)}`);
+                // 跳过完全相同的情况
+                const sameScalar = (!Array.isArray(e.from) && !Array.isArray(e.to) && String(e.from) === String(e.to));
+                const sameVector = (Array.isArray(e.from) && Array.isArray(e.to) &&
+                                    e.from.length === e.to.length &&
+                                    e.from.every((v, i) => String(v) === String(e.to[i])));
+                if (sameScalar || sameVector) return;
+
+                if (Array.isArray(e.from) && Array.isArray(e.to) && e.from.length === 3 && e.to.length === 3) {
+                    const dims = ['记忆/理解', '应用/分析', '评价/创造'];
+                    let anyDim = false;
+                    const dimLines = [];
+                    for (let i = 0; i < 3; i++) {
+                        if (e.from[i] !== e.to[i]) {
+                            anyDim = true;
+                            dimLines.push(`      • ${dims[i]}：${String(e.from[i])} → ${String(e.to[i])}`);
+                        }
+                    }
+                    if (anyDim) {
+                        lines.push(`  - 节点：${e.name}`);
+                        dimLines.forEach(dl => lines.push(dl));
+                    }
+                } else {
+                    lines.push(`  - 节点：${e.name}，status：${String(e.from)} → ${String(e.to)}`);
+                }
             });
         });
     }
@@ -771,6 +833,23 @@ function clearSelection() {
 // 显示节点详情
 function showNodeDetail(node) {
     const detailContent = document.getElementById('detailContent');
+    const renderStatusBadges = (vec) => {
+        const v = Array.isArray(vec) && vec.length === 3 ? vec : [0,0,0];
+        const badge = (label, val, colorBg, colorBorder) => `
+            <span style="display:inline-block;padding:2px 6px;border-radius:12px;margin-right:6px;
+                         font-size:12px;border:1px solid ${colorBorder};
+                         background:${val>0 ? colorBg : '#f3f4f6'};color:${val>0 ? '#111827' : '#6b7280'};">
+              ${label}: ${val}
+            </span>`;
+        return `
+          <div style="margin-top:4px;">
+            ${badge('记忆/理解', v[0], '#DBEAFE', '#93C5FD')}
+            ${badge('应用/分析', v[1], '#DCFCE7', '#86EFAC')}
+            ${badge('评价/创造', v[2], '#EDE9FE', '#C4B5FD')}
+            <span style="margin-left:6px;color:#6b7280;font-size:12px;">raw: [${v.join(', ')}]</span>
+          </div>
+        `;
+    };
     // QA 列表（默认展示前5条，可展开更多）
     let qaHtml = '';
     const qa = Array.isArray(node.bloom_qa_pairs) ? node.bloom_qa_pairs : [];
@@ -852,8 +931,8 @@ function showNodeDetail(node) {
                 <span>${escapeHtml(node.publisher || '')}</span>
             </div>
             <div class="detail-item">
-                <label>状态:</label>
-                <span>${node.status || -1}</span>
+                <label>掌握向量:</label>
+                <span>${renderStatusBadges(node.status)}</span>
             </div>
             <div class="detail-actions">
                 <button onclick="editNode('${node.id}')">编辑节点</button>
@@ -905,7 +984,17 @@ function editNode(nodeId) {
     document.getElementById('editNodeGrade').value = node.grade || '';
     document.getElementById('editNodeSubject').value = node.subject || '';
     document.getElementById('editNodePublisher').value = node.publisher || '';
-    document.getElementById('editNodeStatus').value = node.status || -1;
+    // 设置三维向量复选框
+    (function setStatusNumbers(){
+        const v = (Array.isArray(node.status) && node.status.length === 3) ? node.status : [0,0,0];
+        const wrap = document.getElementById('editStatusVector');
+        if (!wrap) return;
+        const nums = wrap.querySelectorAll('.status-number');
+        nums.forEach(input => {
+            const idx = parseInt(input.getAttribute('data-index'), 10);
+            input.value = v[idx];
+        });
+    })();
 
     // 渲染 QA 编辑区域
     renderQaEditor(Array.isArray(node.bloom_qa_pairs) ? node.bloom_qa_pairs : []);
@@ -993,6 +1082,20 @@ function closeNodeEditModal() {
 async function saveNodeEdit() {
     const uuid = document.getElementById('editNodeUuid').value;
     const qaPairs = collectQaFromEditor();
+    // 收集三维向量
+    const statusVec = (() => {
+        const wrap = document.getElementById('editStatusVector');
+        const nums = wrap ? wrap.querySelectorAll('.status-number') : [];
+        const v = [0,0,0];
+        nums.forEach(input => {
+            const idx = parseInt(input.getAttribute('data-index'), 10);
+            const val = parseInt(input.value, 10);
+            if (!isNaN(idx) && idx >= 0 && idx < 3) {
+                v[idx] = isNaN(val) ? 0 : Math.max(-2, Math.min(2, val));
+            }
+        });
+        return v;
+    })();
     const nodeData = {
         uuid: uuid,
         node_name: document.getElementById('editNodeName').value,
@@ -1000,7 +1103,7 @@ async function saveNodeEdit() {
         grade: document.getElementById('editNodeGrade').value,
         subject: document.getElementById('editNodeSubject').value,
         publisher: document.getElementById('editNodePublisher').value,
-        status: parseInt(document.getElementById('editNodeStatus').value) || -1,
+        status: statusVec,
         student: document.getElementById('kgStudentSelect')?.value || '',
         stage: document.getElementById('kgStageSelect')?.value || '',
         bloom_qa_pairs: qaPairs
@@ -1215,14 +1318,14 @@ function goBackOneLevel() {
 
 // 获取节点颜色
 function getNodeColor(node) {
-    const status = node.status || -1;
-    if (status === 1) {
-        return { background: '#d4edda', border: '#28a745' };
-    } else if (status === 0) {
-        return { background: '#fff3cd', border: '#ffc107' };
-    } else {
-        return { background: '#f8f9fa', border: '#6c757d' };
+    const s = (node && 'status' in node) ? node.status : 0;
+    const isLearned = Array.isArray(s) ? s.some(v => parseInt(v,10) === 1) : (parseInt(s,10) === 1);
+    if (isLearned) {
+        // 已学习：绿色
+        return { background: '#d1fae5', border: '#10b981' };
     }
+    // 未学习（全部为0或非1）：灰色
+    return { background: '#f3f4f6', border: '#d1d5db' };
 }
 
 // 获取边颜色
@@ -1756,15 +1859,13 @@ function expandCluster(clusterId) {
 
 // 获取状态名称
 function getStatusName(status) {
-    switch (status) {
-        case 1:
-            return '已掌握';
-        case 0:
-            return '学习中';
-        case -1:
-        default:
-            return '未学习';
+    // 二值向量规则：只要有一个 1 即视为“已掌握”，否则“未学习”
+    if (Array.isArray(status)) {
+        const learned = status.some(v => parseInt(v, 10) === 1);
+        return learned ? '已掌握' : '未学习';
     }
+    const v = parseInt(status, 10);
+    return v === 1 ? '已掌握' : '未学习';
 }
 
 // 展开年级聚合节点（按状态分组显示）

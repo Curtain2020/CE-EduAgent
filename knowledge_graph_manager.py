@@ -39,6 +39,29 @@ class KnowledgeGraphManager:
             return f"{base}_{self.student_label_en}"
         return base
     
+    # ====== 状态向量规范化 ======
+    def _ensure_status_vector(self, val):
+        """将 status 规范为三维向量 [m,u,c]，元素取整并裁剪到 [-2,2]。
+        兼容历史：None/int/list。int 将映射为 [int,0,0]。
+        """
+        if isinstance(val, list) and len(val) == 3:
+            out = []
+            for x in val:
+                try:
+                    xi = int(x)
+                except Exception:
+                    xi = 0
+                out.append(max(-2, min(2, xi)))
+            return out
+        try:
+            if val is None:
+                return [0, 0, 0]
+            ival = int(val)
+            ival = max(-2, min(2, ival))
+            return [ival, 0, 0]
+        except Exception:
+            return [0, 0, 0]
+    
     def close(self):
         """关闭数据库连接"""
         self.driver.close()
@@ -87,7 +110,7 @@ class KnowledgeGraphManager:
                         "description": record["description"],
                         "grade": record["grade"],
                         "subject": record["subject"],
-                        "status": record["status"],
+                        "status": self._ensure_status_vector(record["status"]),
                         "bloom_qa_pairs": record["bloom_qa_pairs"]
                     }
                     all_nodes.append(node_data)
@@ -155,7 +178,7 @@ class KnowledgeGraphManager:
                         "description": record["description"],
                         "grade": record["grade"],
                         "subject": record["subject"],
-                        "status": record["status"],
+                        "status": self._ensure_status_vector(record["status"]),
                         "bloom_qa_pairs": record["bloom_qa_pairs"]
                     }
                 return None
@@ -221,6 +244,33 @@ class KnowledgeGraphManager:
                 
         except Exception as e:
             self.console.print(f"[red]更新知识点状态失败: {e}[/red]")
+            return False
+    
+    def update_knowledge_vector(self, uuid: str, index: int, value: int) -> bool:
+        """将指定 uuid 的知识点掌握向量某一维更新为 value（0/1）。index: 0/1/2"""
+        try:
+            with self.driver.session() as session:
+                label = self._label()
+                rec = session.run(f"""
+                    MATCH (n:`{label}` {{uuid: $uuid}})
+                    RETURN n.status AS status
+                """, uuid=uuid).single()
+                cur = self._ensure_status_vector(rec["status"] if rec else None)
+                if index < 0 or index > 2:
+                    index = max(0, min(2, int(index)))
+                try:
+                    vi = int(value)
+                except Exception:
+                    vi = 0
+                cur[index] = max(-2, min(2, vi))
+                session.run(f"""
+                    MATCH (n:`{label}` {{uuid: $uuid}})
+                    SET n.status = $status
+                """, uuid=uuid, status=cur)
+            self.console.print(f"[green]✓ 向量更新成功: {uuid} -> {cur}[/green]")
+            return True
+        except Exception as e:
+            self.console.print(f"[red]向量更新失败: {e}[/red]")
             return False
     
     def get_knowledge_statistics(self) -> Dict:
@@ -294,6 +344,8 @@ class KnowledgeGraphManager:
                 properties = node["properties"]
                 bloom_qa_pairs_json = json.dumps(properties.get("bloom_qa_pairs", []), ensure_ascii=False)
                 properties["bloom_qa_pairs"] = bloom_qa_pairs_json
+                # 统一规范 status 为三维向量
+                properties["status"] = self._ensure_status_vector(properties.get("status"))
                 session.run(f"""
                     MERGE (n:`{label}` {{uuid: $uuid}})
                     SET n.node_name = $node_name,

@@ -94,7 +94,7 @@ def _get_cognitive_enhancement_prompt(enable_long_term_memory: bool = False) -> 
     Returns:
         认知增强提示词字符串
     """
-    tools_list = "- recall_knowledge_tool: 查询知识\n- update_knowledge_tool: 学习并记录老师教的新内容"
+    tools_list = "- recall_knowledge_vector_tool: 召回知识点与三维掌握向量\n- update_knowledge_vector_tool: 更新掌握向量的某一维（0/1）"
     if enable_long_term_memory:
         tools_list = "- search_memory_comprehensive: 检索长期记忆（事实和节点）\n" + tools_list
     
@@ -102,7 +102,7 @@ def _get_cognitive_enhancement_prompt(enable_long_term_memory: bool = False) -> 
     parallel_call_instruction = ""
     if enable_long_term_memory:
         parallel_call_instruction = """
-**重要提示**：`recall_knowledge_tool` 和 `search_memory_comprehensive` 可以同时并行调用。
+**重要提示**：`recall_knowledge_vector_tool` 和 `search_memory_comprehensive` 可以同时并行调用。
 - 当老师提出问题时，你可以同时调用这两个工具来获取更全面的信息
 - `recall_knowledge_tool` 用于查询知识库中的知识点状态和内容
 - `search_memory_comprehensive` 用于检索长期记忆中的相关事实和历史经验
@@ -114,20 +114,17 @@ def _get_cognitive_enhancement_prompt(enable_long_term_memory: bool = False) -> 
 
 ### 第一阶段：接收提问与回忆知识
 1. 触发条件：当老师提出一个知识性问题时
-2. 执行动作：你的第一步是调用 `recall_knowledge_tool`{f"，如果启用了长期记忆，也可以同时调用 `search_memory_comprehensive` 来检索相关历史经验" if enable_long_term_memory else ""}
+2. 执行动作：你的第一步是调用 `recall_knowledge_vector_tool`{f"，如果启用了长期记忆，也可以同时调用 `search_memory_comprehensive` 来检索相关历史经验" if enable_long_term_memory else ""}
 3. 如何调用：从老师的问题中提取最核心的"知识点名称"，作为 `name` 参数传入（对于 `search_memory_comprehensive`，使用查询关键词作为 `query` 参数）
-4. 响应方式：在收到工具返回的结果后，你必须严格根据 `status` 字段的值来组织你的回答：
-   - 如果 `status` 为 `1` (已掌握)：利用返回的内容，自信、流利、正确地回答老师的问题
-   - 如果 `status` 为 `-1` (未学习)：直接、诚实地告诉老师你不会。例如："老师，这个我好像没学过。你能讲一下吗？"
-   - 如果 `status` 为 `2` 或 `-2` (知识混淆)：你必须从下面定义的三种错误类型中选择一种，来构建你的错误答案：
-     * ① 概念错误：对核心定义或原理理解错误
-     * ② 计算错误：在具体的加减乘除等运算过程中出错
-     * ③ 方法/步骤错误：知道大概要做什么，但具体的方法、公式或步骤用错
+4. 响应方式：在收到工具返回的结果后，你必须严格根据三维向量 `status=[m,u,c]` 来组织你的回答：
+   - m=1：可以解释概念/性质；m=0：请先请求讲解概念
+   - u=1：可以给出做题步骤/迁移分析；u=0：不要直接做题，说自己不会或者回答错误
+   - c=1：可以评价方法与举一反三；c=0：不要强行延伸，说明需要的信息或示例
 
 ### 第二阶段：学习与记录新知
 1. 触发条件：在你的回答不正确后（即 `status` 不为 `1`），老师会开始为你讲解知识点
 2. 执行动作：与老师进行对话，模拟学习和理解的过程
-3. 当你确信自己已经完全理解了老师的讲解时，在对话的恰当时机，你必须调用 `update_knowledge_tool`，将刚才的知识点status设置为1
+3. 当你确信自己已经掌握某一层级时（一般每次只掌握一个层级），在对话的恰当时机，你必须调用 `update_knowledge_vector_tool`，将对应维度（0）更新为 1
 4. 最佳调用时机：通常是在你口头总结了所学内容，并说出"老师，我明白了！"或类似确认性的话语之后
 
 可用工具：
@@ -176,8 +173,8 @@ def get_tool_definitions(enable_long_term_memory: bool = False, enable_knowledge
         tools.append({
             "type": "function",
             "function": {
-                "name": "recall_knowledge_tool",
-                "description": "查询知识",
+                "name": "recall_knowledge_vector_tool",
+                "description": "查询知识点与掌握向量 status=[m,u,c]（0/1）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -190,15 +187,16 @@ def get_tool_definitions(enable_long_term_memory: bool = False, enable_knowledge
         tools.append({
             "type": "function",
             "function": {
-                "name": "update_knowledge_tool",
-                "description": "学习并记录老师教的新内容",
+                "name": "update_knowledge_vector_tool",
+                "description": "更新掌握向量的某一维（index: 0/1/2, value: 0/1）",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "知识点名称"},
-                        "content": {"type": "string", "description": "学会的内容"}
+                        "index": {"type": "integer", "description": "维度索引：0-记忆理解,1-应用分析,2-评价创造"},
+                        "value": {"type": "integer", "description": "赋值（0/1）"}
                     },
-                    "required": ["name", "content"]
+                    "required": ["name", "index", "value"]
                 }
             }
         })

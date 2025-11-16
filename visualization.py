@@ -294,7 +294,35 @@ def update_node():
                 props['grade'] = data.get('grade', props.get('grade', ''))
                 props['subject'] = data.get('subject', props.get('subject', ''))
                 props['publisher'] = data.get('publisher', props.get('publisher', ''))
-                props['status'] = data.get('status', props.get('status', -1))
+                # 统一规范 status 到向量
+                def _ensure_status_vector(val):
+                    if isinstance(val, list) and len(val) == 3:
+                        try:
+                            return [1 if int(x) == 1 else 0 for x in val]
+                        except Exception:
+                            return [0, 0, 0]
+                    try:
+                        if val is None:
+                            return [0, 0, 0]
+                        ival = int(val)
+                        return [1, 0, 0] if ival == 1 else [0, 0, 0]
+                    except Exception:
+                        return [0, 0, 0]
+                # 三维向量：允许 -2..2 数值，若传入是 list 则逐项规整；若缺失则保留原值
+                def _ensure_status_vector(val):
+                    if isinstance(val, list) and len(val) == 3:
+                        out = []
+                        for x in val:
+                            try:
+                                xi = int(x)
+                                out.append(max(-2, min(2, xi)))
+                            except Exception:
+                                out.append(0)
+                        return out
+                    # 若传入不是 list，则不强制转换，沿用原值（便于向后兼容）
+                    return val
+                incoming = data.get('status', props.get('status'))
+                props['status'] = _ensure_status_vector(incoming)
                 if 'bloom_qa_pairs' in data:
                     props['bloom_qa_pairs'] = data.get('bloom_qa_pairs')
                 updated = True

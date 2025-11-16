@@ -98,8 +98,21 @@
                         <input type="text" id="editNodePublisher">
                     </div>
                     <div class="form-group">
-                        <label>状态:</label>
-                        <input type="number" id="editNodeStatus" value="-1">
+                        <label>掌握向量（status=[m,u,c]）:</label>
+                        <div id="editStatusVector" style="display:flex;gap:12px;align-items:center;">
+                            <label style="display:flex;align-items:center;gap:6px;">
+                                <span>记忆/理解</span>
+                                <input type="number" class="status-number" data-index="0" min="-2" max="2" step="1" style="width:60px;">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;">
+                                <span>应用/分析</span>
+                                <input type="number" class="status-number" data-index="1" min="-2" max="2" step="1" style="width:60px;">
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;">
+                                <span>评价/创造</span>
+                                <input type="number" class="status-number" data-index="2" min="-2" max="2" step="1" style="width:60px;">
+                            </label>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>认知问答对（可编辑）:</label>
