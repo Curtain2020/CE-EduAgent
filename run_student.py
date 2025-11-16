@@ -28,6 +28,8 @@ from src.services.funasr_ws import transcribe_audio, parse_chunk_sizes, FunASRCl
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import ToolMessage
+from datetime import datetime
+from flask import Response
 
 app = Flask(__name__)
 CORS(app)
@@ -257,6 +259,14 @@ def build_response_with_results(intent: str, action: str, responses: List[dict])
 
 
 def handle_continue_intent(user_message: str) -> dict:
+    """当老师继续讲解：
+    - 若有学生已起立，则由该学生继续回答
+    - 否则，仅记录并由课堂助手提示
+    """
+    standing_student = get_standing_student()
+    if standing_student:
+        result = trigger_student_stand_and_speak(standing_student, user_message)
+        return build_response_with_results(INTENT_CONTINUE, 'standing_continue', [result])
     return build_wait_response(INTENT_CONTINUE, 'recorded', '已记录老师讲课内容。')
 
 
@@ -342,6 +352,158 @@ def run_async(coro):
             return loop.run_until_complete(coro)
         finally:
             loop.close()
+
+# ===== 图谱导入/导出 支持 =====
+INDEX_PATH = os.path.join(os.path.dirname(__file__), "data", "student_graphs", "index.json")
+
+def student_label_en_from_cn(name: str) -> str:
+    mapping = {
+        "崔展豪": "Cuizhanhao",
+        "包梓群": "Baoziqun",
+        "李昌龙": "Lichanglong",
+        "丽娃": "Liwa",
+        "萧华诗": "Xiaohuashi",
+        "张晓丹": "Zhangxidan",
+    }
+    return mapping.get(name, name)
+
+def read_index() -> dict:
+    with open(INDEX_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def write_index(data: dict):
+    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+@app.route('/api/graph/index', methods=['GET'])
+def api_graph_index():
+    try:
+        return jsonify({"success": True, "data": read_index()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/graph/import_latest', methods=['POST'])
+def api_graph_import_latest():
+    """按 index.json 的 current_stage 为所选学生导入最新图谱到 Neo4j"""
+    try:
+        payload = request.json or {}
+        student_names = payload.get("student_names") or active_student_names or []
+        if not student_names:
+            return jsonify({"success": False, "error": "没有可导入的学生"}), 400
+
+        idx = read_index()
+        from knowledge_graph_manager import KnowledgeGraphManager
+        results = []
+        for cn in student_names:
+            item = idx.get(cn)
+            if not item:
+                results.append({"student": cn, "success": False, "error": "index.json 无该学生"})
+                continue
+            stage = item.get("current_stage")
+            path = (item.get("stages") or {}).get(stage)
+            if not stage or not path:
+                results.append({"student": cn, "success": False, "error": "未找到最新阶段文件"})
+                continue
+            en = student_label_en_from_cn(cn)
+            kgm = KnowledgeGraphManager(student_label_en=en)
+            abs_path = os.path.join(os.path.dirname(__file__), path) if not os.path.isabs(path) else path
+            kgm.import_student_graph_from_file(en, abs_path, clear_existing=True)
+            results.append({"student": cn, "success": True, "stage": stage})
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/graph/export', methods=['POST'])
+def api_graph_export():
+    """将当前 Neo4j 中各学生的子图导出为 json，并更新 index.json 为最新版本"""
+    try:
+        payload = request.json or {}
+        student_names = payload.get("student_names") or active_student_names or []
+        if not student_names:
+            return jsonify({"success": False, "error": "没有可导出的学生"}), 400
+
+        base_dir = os.path.join(os.path.dirname(__file__), "data", "student_graphs")
+        os.makedirs(base_dir, exist_ok=True)
+        idx = read_index()
+
+        from knowledge_graph_manager import KnowledgeGraphManager
+        results = []
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        for cn in student_names:
+            en = student_label_en_from_cn(cn)
+            kgm = KnowledgeGraphManager(student_label_en=en)
+            data = kgm.export_student_graph(en)
+
+            stu_dir = os.path.join(base_dir, cn)
+            os.makedirs(stu_dir, exist_ok=True)
+            rel_path = f"data/student_graphs/{cn}/{timestamp}.json"
+            abs_path = os.path.join(os.path.dirname(__file__), rel_path)
+            with open(abs_path, "w", encoding="utf-8") as f:
+                # 以缩进格式写入并关闭 ASCII 转义
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # 更新 index.json
+            stu = idx.get(cn) or {"current_stage": "", "stages": {}}
+            stu_stages = stu.get("stages") or {}
+            stu_stages[timestamp] = rel_path
+            stu["stages"] = stu_stages
+            stu["current_stage"] = timestamp
+            idx[cn] = stu
+
+            results.append({"student": cn, "success": True, "stage": timestamp, "path": rel_path})
+
+        write_index(idx)
+        return jsonify({"success": True, "results": results, "timestamp": timestamp})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ===== 知识图谱管理（按学生/版本加载与设置当前） =====
+@app.route('/api/kg/graph', methods=['GET'])
+def api_kg_graph():
+    """返回指定学生+阶段的图谱（读取 index.json 指向的 JSON 文件）"""
+    try:
+        student_cn = request.args.get('student')
+        stage = request.args.get('stage')
+        if not student_cn or not stage:
+            return jsonify({"success": False, "error": "缺少 student 或 stage"}), 400
+        if not os.path.exists(INDEX_PATH):
+            return jsonify({"success": False, "error": "index.json 不存在"}), 404
+        with open(INDEX_PATH, "r", encoding="utf-8") as f:
+            idx = json.load(f)
+        stu = idx.get(student_cn) or {}
+        path = (stu.get("stages") or {}).get(stage)
+        if not path:
+            return jsonify({"success": False, "error": "未找到该阶段图谱"}), 404
+        abs_path = os.path.join(os.path.dirname(__file__), path) if not os.path.isabs(path) else path
+        with open(abs_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify({"success": True, "nodes": data.get("nodes", []), "edges": data.get("edges", [])})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/graph/set_current', methods=['POST'])
+def api_graph_set_current():
+    """将某学生指定阶段设置为当前版本"""
+    try:
+        payload = request.json or {}
+        student_cn = payload.get("student")
+        stage = payload.get("stage")
+        if not student_cn or not stage:
+            return jsonify({"success": False, "error": "缺少 student 或 stage"}), 400
+        if not os.path.exists(INDEX_PATH):
+            return jsonify({"success": False, "error": "index.json 不存在"}), 404
+        with open(INDEX_PATH, "r", encoding="utf-8") as f:
+            idx = json.load(f)
+        if student_cn not in idx:
+            return jsonify({"success": False, "error": "index.json 无该学生"}), 404
+        if stage not in (idx[student_cn].get("stages") or {}):
+            return jsonify({"success": False, "error": "该学生无此阶段"}), 404
+        idx[student_cn]["current_stage"] = stage
+        with open(INDEX_PATH, "w", encoding="utf-8") as f:
+            json.dump(idx, f, ensure_ascii=False, indent=2)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/')

@@ -13,6 +13,7 @@ CORS(app)
 
 # 知识图谱JSON文件路径
 KG_JSON_PATH = os.path.join(os.path.dirname(__file__), 'data', '小学数学图谱_v3.json')
+INDEX_PATH = os.path.join(os.path.dirname(__file__), 'data', 'student_graphs', 'index.json')
 
 
 @app.route('/')
@@ -101,6 +102,68 @@ def load_knowledge_graph():
             'success': False,
             'error': str(e)
         }), 500
+
+# ====== 版本索引与按学生/版本加载 ======
+@app.route('/api/graph/index', methods=['GET'])
+def api_graph_index():
+    """返回 data/student_graphs/index.json 内容"""
+    try:
+        if not os.path.exists(INDEX_PATH):
+            return jsonify({"success": False, "error": "index.json 不存在"}), 404
+        with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/kg/graph', methods=['GET'])
+def api_kg_graph():
+    """返回指定学生+阶段的图谱（从 index.json 指向的 json 文件加载）"""
+    try:
+        student_cn = request.args.get('student')
+        stage = request.args.get('stage')
+        if not student_cn or not stage:
+            return jsonify({"success": False, "error": "缺少 student 或 stage"}), 400
+        if not os.path.exists(INDEX_PATH):
+            return jsonify({"success": False, "error": "index.json 不存在"}), 404
+        with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+            idx = json.load(f)
+        stu = idx.get(student_cn) or {}
+        path = (stu.get("stages") or {}).get(stage)
+        if not path:
+            return jsonify({"success": False, "error": "未找到该阶段图谱"}), 404
+        abs_path = os.path.join(os.path.dirname(__file__), path) if not os.path.isabs(path) else path
+        if not os.path.exists(abs_path):
+            return jsonify({"success": False, "error": "阶段图谱文件不存在"}), 404
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return jsonify({"success": True, "nodes": data.get("nodes", []), "edges": data.get("edges", [])})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/graph/set_current', methods=['POST'])
+def api_graph_set_current():
+    """将某学生指定阶段设置为当前版本（修改 index.json）"""
+    try:
+        payload = request.json or {}
+        student_cn = payload.get('student')
+        stage = payload.get('stage')
+        if not student_cn or not stage:
+            return jsonify({"success": False, "error": "缺少 student 或 stage"}), 400
+        if not os.path.exists(INDEX_PATH):
+            return jsonify({"success": False, "error": "index.json 不存在"}), 404
+        with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+            idx = json.load(f)
+        if student_cn not in idx:
+            return jsonify({"success": False, "error": "index.json 无该学生"}), 404
+        if stage not in (idx[student_cn].get("stages") or {}):
+            return jsonify({"success": False, "error": "该学生无此阶段"}), 404
+        idx[student_cn]["current_stage"] = stage
+        with open(INDEX_PATH, 'w', encoding='utf-8') as f:
+            json.dump(idx, f, ensure_ascii=False, indent=2)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/kg/save', methods=['POST'])
@@ -204,8 +267,21 @@ def update_node():
                 'error': '缺少uuid字段'
             }), 400
         
+        # 解析目标文件（优先 student+stage）
+        target_path = KG_JSON_PATH
+        student_cn = data.get('student')
+        stage = data.get('stage')
+        if student_cn and stage and os.path.exists(INDEX_PATH):
+            with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+                idx = json.load(f)
+            rel = (idx.get(student_cn, {}).get('stages') or {}).get(stage)
+            if rel:
+                abs_path = os.path.join(os.path.dirname(__file__), rel) if not os.path.isabs(rel) else rel
+                if os.path.exists(abs_path):
+                    target_path = abs_path
+
         # 读取现有数据
-        with open(KG_JSON_PATH, 'r', encoding='utf-8') as f:
+        with open(target_path, 'r', encoding='utf-8') as f:
             kg_data = json.load(f)
         
         # 更新节点
@@ -231,8 +307,8 @@ def update_node():
             }), 404
         
         # 保存文件
-        with open(KG_JSON_PATH, 'w', encoding='utf-8') as f:
-            json.dump(kg_data, f, ensure_ascii=False, indent=4)
+        with open(target_path, 'w', encoding='utf-8') as f:
+            json.dump(kg_data, f, ensure_ascii=False, indent=2)
         
         return jsonify({
             'success': True,
@@ -269,8 +345,21 @@ def update_edge():
                 'error': '缺少start_uuid或end_uuid字段'
             }), 400
         
+        # 解析目标文件（优先 student+stage）
+        target_path = KG_JSON_PATH
+        student_cn = data.get('student')
+        stage = data.get('stage')
+        if student_cn and stage and os.path.exists(INDEX_PATH):
+            with open(INDEX_PATH, 'r', encoding='utf-8') as f:
+                idx = json.load(f)
+            rel = (idx.get(student_cn, {}).get('stages') or {}).get(stage)
+            if rel:
+                abs_path = os.path.join(os.path.dirname(__file__), rel) if not os.path.isabs(rel) else rel
+                if os.path.exists(abs_path):
+                    target_path = abs_path
+
         # 读取现有数据
-        with open(KG_JSON_PATH, 'r', encoding='utf-8') as f:
+        with open(target_path, 'r', encoding='utf-8') as f:
             kg_data = json.load(f)
         
         # 更新边
@@ -291,8 +380,8 @@ def update_edge():
             }), 404
         
         # 保存文件
-        with open(KG_JSON_PATH, 'w', encoding='utf-8') as f:
-            json.dump(kg_data, f, ensure_ascii=False, indent=4)
+        with open(target_path, 'w', encoding='utf-8') as f:
+            json.dump(kg_data, f, ensure_ascii=False, indent=2)
         
         return jsonify({
             'success': True,

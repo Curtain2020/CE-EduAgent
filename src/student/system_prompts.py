@@ -80,8 +80,8 @@ def _get_long_term_memory_prompt() -> str:
     """
     return """## 长期记忆功能
 
-你可以使用 `search_memory_comprehensive` 工具来检索你的长期记忆，帮助回答老师的问题。
-- 会主动检索自己的长期记忆来回答问题
+你要使用 `search_memory_comprehensive` 工具来检索你的长期记忆，帮助回答老师的问题。
+- 你**总是**会主动检索自己的长期记忆来回答问题
 - 在回答问题时，可以调用该工具搜索相关的历史知识和经验"""
 
 

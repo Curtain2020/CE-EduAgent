@@ -1,0 +1,41 @@
+{
+  "崔展豪": {
+    "current_stage": "20251116_100003",
+    "stages": {
+      "20251115_211822": "data/student_graphs/崔展豪/20251115_211822.json",
+      "20251116_100003": "data/student_graphs/崔展豪/20251116_100003.json",
+      "20251116_042322": "data/student_graphs/崔展豪/20251116_042322.json"
+    }
+  },
+  "李昌龙": {
+    "current_stage": "20251115_211822",
+    "stages": {
+      "20251115_211822": "data/student_graphs/李昌龙/20251115_211822.json"
+    }
+  },
+  "包梓群": {
+    "current_stage": "20251115_211822",
+    "stages": {
+      "20251115_211822": "data/student_graphs/包梓群/20251115_211822.json"
+    }
+  },
+  "丽娃": {
+    "current_stage": "20251116_041649",
+    "stages": {
+      "20251115_211822": "data/student_graphs/丽娃/20251115_211822.json",
+      "20251116_041649": "data/student_graphs/丽娃/20251116_041649.json"
+    }
+  },
+  "张晓丹": {
+    "current_stage": "20251115_211822",
+    "stages": {
+      "20251115_211822": "data/student_graphs/张晓丹/20251115_211822.json"
+    }
+  },
+  "萧华诗": {
+    "current_stage": "20251115_211822",
+    "stages": {
+      "20251115_211822": "data/student_graphs/萧华诗/20251115_211822.json"
+    }
+  }
+}

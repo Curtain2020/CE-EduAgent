@@ -12,11 +12,12 @@ _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 from knowledge_graph_manager import KnowledgeGraphManager
+from typing import Optional
 
 from ..config.settings import console
 
 
-def create_knowledge_tools():
+def create_knowledge_tools(student_label_en: Optional[str] = None):
     """创建知识库检索和更新工具
     
     Returns:
@@ -24,7 +25,7 @@ def create_knowledge_tools():
     """
     
     # 初始化知识图谱管理器
-    kg_manager = KnowledgeGraphManager()
+    kg_manager = KnowledgeGraphManager(student_label_en=student_label_en)
     
     @tool
     async def recall_knowledge_tool(name: str) -> str:

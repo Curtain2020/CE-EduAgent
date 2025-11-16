@@ -8,14 +8,26 @@ let currentSelectedNode = null;
 let currentSelectedEdge = null;
 let allNodesData = []; // 保存所有原始节点数据
 let allEdgesData = []; // 保存所有原始边数据
-let currentClusterMode = 'none'; // 当前聚合模式
+let currentClusterMode = 'grade_status'; // 固定按年级聚合
 let clusterMap = {}; // 聚合节点映射：clusterId -> [nodeIds]
 let clusterInfo = {}; // 聚合节点信息：clusterId -> {label, count, group}
 
+// 版本管理状态
+let kgIndex = null;               // index.json
+let currentStudentCN = null;      // 学生中文名
+let currentStage = null;          // 主版本
+let compareStage = null;          // 对比版本
+
 // 初始化
-document.addEventListener('DOMContentLoaded', function() {
-    // 自动加载图谱
-    loadKnowledgeGraph();
+document.addEventListener('DOMContentLoaded', async function() {
+    // 初始化学生/版本选择
+    await initVersionSelectors();
+    // 加载图谱（如果版本选择已完成）
+    if (currentStudentCN && currentStage) {
+        await loadSelectedGraph();
+    } else {
+        loadKnowledgeGraph();
+    }
 });
 
 // 加载知识图谱
@@ -195,9 +207,7 @@ async function loadKnowledgeGraph() {
                     springLength: 100,
                     springConstant: 0.08,
                     damping: 0.9, // 增加阻尼，让节点更快稳定
-                    avoidOverlap: 1,
-                    adjustSizes: false,
-                    outboundAttractionDistribution: false
+                    avoidOverlap: 1
                 },
                 timestep: 0.35, // 减小时间步长，让节点更稳定
                 adaptiveTimestep: true,
@@ -292,13 +302,13 @@ async function loadKnowledgeGraph() {
         document.getElementById('saveBtn').disabled = false;
         document.getElementById('resetViewBtn').disabled = false;
         document.getElementById('fitViewBtn').disabled = false;
-        document.getElementById('clusterMode').disabled = false;
+        // 固定聚合，无需启用聚合选择控件
         
         updateStatus(`加载成功: ${nodesData.length} 个节点, ${edgesData.length} 条边`, 'success');
         updateCounts(nodesData.length, edgesData.length);
         
-        // 默认不聚合，用户可以选择
-        // changeClusterMode('grade');
+        // 默认并固定为按年级聚合
+        applyClusterMode('grade_status');
         
     } catch (error) {
         updateStatus('加载失败: ' + error.message, 'error');
@@ -306,6 +316,396 @@ async function loadKnowledgeGraph() {
     }
 }
 
+// ====== 版本管理：加载 index，下拉选择，加载/设为当前/对比 ======
+async function initVersionSelectors() {
+    try {
+        const resp = await fetch('/api/graph/index');
+        const data = await resp.json();
+        if (!data.success) return;
+        kgIndex = data.data || {};
+        const stuSel = document.getElementById('kgStudentSelect');
+        const stageSel = document.getElementById('kgStageSelect');
+        const cmpSel = document.getElementById('kgCompareStageSelect');
+        if (!stuSel || !stageSel || !cmpSel) return;
+
+        stuSel.innerHTML = '';
+        Object.keys(kgIndex).forEach(cn => {
+            const opt = document.createElement('option');
+            opt.value = cn; opt.textContent = cn;
+            stuSel.appendChild(opt);
+        });
+        currentStudentCN = stuSel.value || Object.keys(kgIndex)[0] || null;
+        fillStagesFor(currentStudentCN);
+
+        stuSel.addEventListener('change', () => {
+            currentStudentCN = stuSel.value;
+            fillStagesFor(currentStudentCN);
+        });
+    } catch (e) {
+        console.warn('加载 index.json 失败', e);
+    }
+}
+
+function fillStagesFor(studentCN) {
+    const stageSel = document.getElementById('kgStageSelect');
+    const cmpSel = document.getElementById('kgCompareStageSelect');
+    const meta = document.getElementById('kgMetaInfo');
+    if (!kgIndex || !kgIndex[studentCN]) return;
+    const info = kgIndex[studentCN];
+    const stages = info.stages || {};
+    const current = info.current_stage;
+
+    const sortedStages = Object.keys(stages).sort();
+    stageSel.innerHTML = '';
+    cmpSel.innerHTML = '<option value="">(不选择)</option>';
+    sortedStages.forEach(ts => {
+        const opt = document.createElement('option');
+        opt.value = ts;
+        opt.textContent = `${ts}${ts===current?'（当前）':''}`;
+        stageSel.appendChild(opt);
+
+        const opt2 = document.createElement('option');
+        opt2.value = ts; opt2.textContent = ts;
+        cmpSel.appendChild(opt2);
+    });
+    stageSel.value = current || sortedStages.at(-1) || '';
+    currentStage = stageSel.value;
+    meta.textContent = `当前学生：${studentCN}，当前版本：${current || '—'}`;
+}
+
+async function loadSelectedGraph() {
+    const stu = document.getElementById('kgStudentSelect')?.value;
+    const stage = document.getElementById('kgStageSelect')?.value;
+    if (!stu || !stage) {
+        updateStatus('请选择学生与版本后再加载图谱', 'error');
+        return;
+    }
+    currentStudentCN = stu; currentStage = stage;
+    try {
+        updateStatus('正在加载图谱...', 'loading');
+        const res = await fetch(`/api/kg/graph?student=${encodeURIComponent(stu)}&stage=${encodeURIComponent(stage)}`);
+        const data = await res.json();
+        if (!data.success) { updateStatus('加载失败：'+(data.error||''),'error'); return; }
+        const { visNodes, visEdges } = normalizeGraphForVis(data.nodes, data.edges);
+        allNodesData = visNodes;
+        allEdgesData = visEdges;
+        // 同步用于详情/编辑的数据源
+        nodesData = allNodesData.slice();
+        edgesData = allEdgesData.slice();
+        // 确保网络实例已初始化
+        initNetworkIfNeeded();
+        applyClusterMode('grade_status');
+        const wrap = document.getElementById('kgDiffSummary');
+        if (wrap) { wrap.style.display = 'none'; wrap.innerHTML=''; }
+        updateStatus(`加载成功: ${allNodesData.length} 个节点, ${allEdgesData.length} 条边`, 'success');
+    } catch (e) {
+        updateStatus('加载失败：'+(e.message||e), 'error');
+        console.error('loadSelectedGraph error:', e);
+    }
+}
+
+// 若尚未创建 network，则以通用配置初始化
+function initNetworkIfNeeded() {
+    if (network) return;
+    const container = document.getElementById('knowledgeGraph');
+    if (!container) return;
+    const empty = { nodes: new vis.DataSet([]), edges: new vis.DataSet([]) };
+    const options = {
+        nodes: {
+            shape: 'box',
+            font: { size: 14, color: '#333' },
+            borderWidth: 2,
+            shadow: false,
+            scaling: { min: 10, max: 30, label: { enabled: true, min: 12, max: 20 } },
+            chosen: { node: function(values, id, selected, hovering) {
+                if (selected || hovering) { values.borderWidth = 4; values.borderColor = '#667eea'; }
+            }}
+        },
+        edges: {
+            arrows: { to: { enabled: true, scaleFactor: 0.8 } },
+            font: { size: 12, align: 'middle', color: '#666' },
+            smooth: { type: 'dynamic', roundness: 0.5 },
+            color: { color: '#848484', highlight: '#667eea' },
+            width: 2,
+            chosen: { edge: function(values, id, selected, hovering) {
+                if (selected || hovering) { values.width = 4; values.color = '#667eea'; }
+            }},
+            selectionWidth: 2,
+            shadow: false
+        },
+        physics: {
+            enabled: true,
+            stabilization: { enabled: true, iterations: 200, fit: true, updateInterval: 25 },
+            solver: 'forceAtlas2Based',
+            forceAtlas2Based: {
+                gravitationalConstant: -50, centralGravity: 0.01,
+                springLength: 100, springConstant: 0.08,
+                damping: 0.9, avoidOverlap: 1
+            },
+            timestep: 0.35, adaptiveTimestep: true
+        },
+        interaction: {
+            hover: true, tooltipDelay: 200,
+            hideEdgesOnDrag: true, hideEdgesOnZoom: false,
+            zoomView: true, dragView: true, selectConnectedEdges: false
+        },
+        layout: { improvedLayout: true }
+    };
+    network = new vis.Network(container, empty, options);
+    network.on('stabilizationEnd', function() {
+        network.setOptions({ physics: { enabled: false } });
+    });
+    // 关键事件：点击/双击支持展开
+    network.on('click', function(params) {
+        if (params.nodes && params.nodes.length > 0) {
+            const nodeId = params.nodes[0];
+            // 聚合节点不展示详情，仅用于展开
+            if (typeof nodeId === 'string' && nodeId.startsWith('cluster_')) {
+                return;
+            }
+            selectNode(nodeId);
+            return;
+        }
+        if (params.edges && params.edges.length > 0) {
+            const edgeId = params.edges[0];
+            selectEdge(edgeId);
+            return;
+        }
+        clearSelection();
+    });
+    network.on('doubleClick', function(params) {
+        if (params.nodes && params.nodes.length > 0) {
+            const nodeId = params.nodes[0];
+            if (typeof nodeId === 'string' && nodeId.startsWith('cluster_')) {
+                if (nodeId.startsWith('cluster_grade_status_grade_')) {
+                    expandGradeCluster(nodeId);
+                } else if (nodeId.startsWith('cluster_grade_status_status_')) {
+                    expandCluster(nodeId);
+                } else {
+                    expandCluster(nodeId);
+                }
+            } else if (nodeId) {
+                editNode(nodeId);
+            }
+        } else if (params.edges && params.edges.length > 0) {
+            const edgeId = params.edges[0];
+            if (edgeId) editEdge(edgeId);
+        }
+    });
+}
+
+async function setSelectedAsCurrent() {
+    const stu = document.getElementById('kgStudentSelect')?.value;
+    const stage = document.getElementById('kgStageSelect')?.value;
+    if (!stu || !stage) return;
+    const resp = await fetch('/api/graph/set_current', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ student: stu, stage })
+    });
+    const data = await resp.json();
+    if (!data.success) { updateStatus('设置当前版本失败：'+(data.error||''),'error'); return; }
+    // 不刷新整体选择，仅在内存与UI中标注当前版本
+    if (kgIndex && kgIndex[stu]) {
+        kgIndex[stu].current_stage = stage;
+    }
+    // 更新下拉选项的“（当前）”标记
+    const stageSel = document.getElementById('kgStageSelect');
+    if (stageSel) {
+        for (let i = 0; i < stageSel.options.length; i++) {
+            const opt = stageSel.options[i];
+            const rawVal = opt.value;
+            // 去掉旧标记
+            opt.textContent = rawVal + (rawVal === stage ? '（当前）' : '');
+        }
+    }
+    const meta = document.getElementById('kgMetaInfo');
+    if (meta) meta.textContent = `当前学生：${stu}，当前版本：${stage}`;
+    updateStatus('已设置为当前版本（无需刷新）','success');
+}
+
+async function compareTwoStages() {
+    const stu = document.getElementById('kgStudentSelect')?.value;
+    const stageA = document.getElementById('kgStageSelect')?.value;
+    const stageB = document.getElementById('kgCompareStageSelect')?.value;
+    if (!stu || !stageA || !stageB) { updateStatus('请选择学生与两个版本','error'); return; }
+    if (stageA === stageB) { updateStatus('两个版本不能相同','error'); return; }
+    const [resA, resB] = await Promise.all([
+        fetch(`/api/kg/graph?student=${encodeURIComponent(stu)}&stage=${encodeURIComponent(stageA)}`).then(r=>r.json()),
+        fetch(`/api/kg/graph?student=${encodeURIComponent(stu)}&stage=${encodeURIComponent(stageB)}`).then(r=>r.json())
+    ]);
+    if (!resA.success || !resB.success) { updateStatus('加载版本数据失败','error'); return; }
+    // 按要求：比较“目标版本 -> 基准版本”
+    // stageA = 目标版本（当前选择的版本），stageB = 基准版本（对比版本）
+    const base = normalizeGraphForVis(resB.nodes, resB.edges);   // 基准
+    const target = normalizeGraphForVis(resA.nodes, resA.edges); // 目标
+    const diff = diffGraphs(base, target);
+    // 不改变当前画布，只生成摘要
+    renderDiffSummary(stu, stageA, stageB, diff);
+}
+
+function normalizeGraphForVis(nodes, edges) {
+    const visNodes = (nodes||[]).map(n => {
+        const p = n.properties || {};
+        // 解析 QA 对（可能为数组或 JSON 字符串）
+        let qaPairs = [];
+        if (Array.isArray(p.bloom_qa_pairs)) {
+            qaPairs = p.bloom_qa_pairs;
+        } else if (typeof p.bloom_qa_pairs === 'string') {
+            try { qaPairs = JSON.parse(p.bloom_qa_pairs) || []; } catch(e) { qaPairs = []; }
+        }
+        return {
+            id: p.uuid || p.node_name || Math.random().toString(36).slice(2),
+            uuid: p.uuid,
+            node_name: p.node_name,
+            label: p.node_name,
+            description: p.description,
+            grade: p.grade,
+            subject: p.subject,
+            publisher: p.publisher,
+            status: typeof p.status === 'number' ? p.status : -1,
+            bloom_qa_pairs: qaPairs
+        };
+    });
+    const visEdges = (edges||[]).map((e, i) => ({
+        id: `e_${i}_${e.start_uuid}_${e.end_uuid}_${e.type}`,
+        from: e.start_uuid,
+        to: e.end_uuid,
+        type: e.type,
+        label: e.type,
+        description: (e.properties||{}).description || ''
+    }));
+    return { visNodes, visEdges };
+}
+
+function diffGraphs(base, target) {
+    const bNodes = new Map((base.visNodes||[]).map(n => [n.uuid, n]));
+    const tNodes = new Map((target.visNodes||[]).map(n => [n.uuid, n]));
+    const bEdges = new Set((base.visEdges||[]).map(e => `${e.from}|${e.type}|${e.to}`));
+    const tEdges = new Set((target.visEdges||[]).map(e => `${e.from}|${e.type}|${e.to}`));
+
+    const addedNodes = [];
+    const removedNodes = [];
+    const changedNodes = [];
+
+    tNodes.forEach((tn, id) => {
+        if (!bNodes.has(id)) {
+            addedNodes.push(tn);
+        } else {
+            const bn = bNodes.get(id);
+            const changedFields = [];
+            ['node_name','description','grade','subject','publisher','status'].forEach(k => {
+                if ((bn[k]||'') !== (tn[k]||'')) changedFields.push({field:k, from:bn[k], to:tn[k]});
+            });
+            if (changedFields.length) changedNodes.push({ node: tn, changes: changedFields });
+        }
+    });
+    bNodes.forEach((bn, id) => { if (!tNodes.has(id)) removedNodes.push(bn); });
+
+    const addedEdges = [];
+    const removedEdges = [];
+    tEdges.forEach(key => { if (!bEdges.has(key)) addedEdges.push(key); });
+    bEdges.forEach(key => { if (!tEdges.has(key)) removedEdges.push(key); });
+    return { addedNodes, removedNodes, changedNodes, addedEdges, removedEdges };
+}
+
+function applyDiffHighlight(diff) {
+    if (!network) return;
+    const visNodes = network.body.data.nodes;
+    const visEdges = network.body.data.edges;
+    const green = { background:'#d1fae5', border:'#10b981' };
+    const orange = { background:'#fff7ed', border:'#f59e0b' };
+    diff.addedNodes.forEach(n => { if (visNodes.get(n.uuid)) visNodes.update({ id: n.uuid, color: green, borderWidth: 3 }); });
+    diff.changedNodes.forEach(({node:n}) => { if (visNodes.get(n.uuid)) visNodes.update({ id: n.uuid, color: orange, borderWidth: 3 }); });
+    diff.addedEdges.forEach(k => {
+        const e = Array.from(visEdges.get()).find(e => `${e.from}|${e.label||''}|${e.to}` === k || `${e.from}|${e.type||''}|${e.to}` === k);
+        if (e) visEdges.update({ id: e.id, width: 4, color: { color:'#10b981', highlight:'#10b981' } });
+    });
+}
+
+function renderDiffSummary(studentCN, stageA, stageB, diff) {
+    const wrap = document.getElementById('kgDiffSummary');
+    if (!wrap) return;
+    // 仅展示：变更了哪个年级的哪个节点，status 变化情况
+    // 从变更节点中筛选出 status 发生变化的项
+    const statusChanged = (diff.changedNodes || []).map(item => {
+        const statusChange = (item.changes || []).find(ch => ch.field === 'status');
+        if (!statusChange) return null;
+        const node = item.node || {};
+        return {
+            grade: node.grade || '未分类',
+            name: node.node_name || node.uuid || '',
+            from: statusChange.from,
+            to: statusChange.to
+        };
+    }).filter(Boolean);
+
+    // 按年级分组
+    const byGrade = {};
+    statusChanged.forEach(entry => {
+        if (!byGrade[entry.grade]) byGrade[entry.grade] = [];
+        byGrade[entry.grade].push(entry);
+    });
+
+    // 生成摘要文本
+    const lines = [];
+    // 文案：目标版本 -> 基准版本
+    lines.push(`对比学生：${studentCN}，目标版本：${stageA} → 基准版本：${stageB}`);
+    if (statusChanged.length === 0) {
+        lines.push('本次对比未发现状态（status）变更。');
+    } else {
+        Object.keys(byGrade).sort().forEach(grade => {
+            lines.push(`年级：${grade}`);
+            byGrade[grade].forEach(e => {
+                lines.push(`  - 节点：${e.name}，status：${String(e.from)} → ${String(e.to)}`);
+            });
+        });
+    }
+    // 使用更紧凑的黄框摘要可视化（限制尺寸 + 列表格式 + 表情）
+    const header = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="font-weight:700;">📝 版本对比摘要</span>
+        <span style="font-size:12px;color:#b45309;">（目标：${studentCN ? '👩‍🎓 ' + studentCN : ''} ${stageA} → 基准：${stageB}）</span>
+      </div>
+    `;
+    let bodyHtml = '';
+    if (statusChanged.length === 0) {
+        bodyHtml = `<div style="color:#b45309;">✅ 本次对比未发现状态（status）变更</div>`;
+    } else {
+        const gradeKeys = Object.keys(byGrade).sort();
+        bodyHtml = gradeKeys.map(grade => {
+            const items = byGrade[grade]
+              .map(e => `<li style="margin:2px 0;">🔸 <span style="font-weight:600;">${escapeHtml(e.name)}</span> <span style="opacity:.75;">status</span>：<span style="color:#16a34a;">${String(e.from)}</span> → <span style="color:#dc2626;">${String(e.to)}</span></li>`)
+              .join('');
+            return `
+              <div style="margin:6px 0 8px;">
+                <div style="font-weight:600;margin:2px 0;">🗂️ 年级：${escapeHtml(grade)}</div>
+                <ul style="margin:0 0 0 18px;padding:0;">${items}</ul>
+              </div>
+            `;
+        }).join('');
+    }
+    wrap.innerHTML = `
+      <div style="
+        display:inline-block;
+        padding:8px 10px;
+        border:1px solid #f59e0b;
+        background:#FFFBEB;
+        color:#92400e;
+        border-radius:8px;
+        line-height:1.55;
+        box-shadow:0 1px 2px rgba(0,0,0,0.06);
+        max-width:520px;
+        max-height:180px;
+        overflow:auto;
+      ">
+        ${header}
+        <div style="font-size:12.5px;">
+          ${bodyHtml}
+        </div>
+      </div>
+    `;
+    wrap.style.display = 'block';
+}
 // 保存知识图谱
 async function saveKnowledgeGraph() {
     if (!confirm('确定要保存知识图谱吗？这将覆盖原文件（已自动创建备份）。')) {
@@ -371,6 +771,59 @@ function clearSelection() {
 // 显示节点详情
 function showNodeDetail(node) {
     const detailContent = document.getElementById('detailContent');
+    // QA 列表（默认展示前5条，可展开更多）
+    let qaHtml = '';
+    const qa = Array.isArray(node.bloom_qa_pairs) ? node.bloom_qa_pairs : [];
+    if (qa.length > 0) {
+        const maxShow = 5;
+        const head = qa.slice(0, maxShow).map((item, idx) => {
+            const level = item.level_zh || item.level || '—';
+            const q = (item.question || '').toString();
+            const a = (item.answer || '').toString();
+            return `
+                <div style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:6px 0;">
+                    <div style="font-weight:600;color:#374151;">${idx+1}. ${escapeHtml(level)}</div>
+                    <div style="color:#4b5563;margin-top:4px;">❓ ${escapeHtml(q)}</div>
+                    <div style="color:#111827;margin-top:2px;">✅ ${escapeHtml(a)}</div>
+                </div>
+            `;
+        }).join('');
+        const tailCount = qa.length - maxShow;
+        const tailBtn = tailCount > 0
+            ? `<button id="qaExpandBtn" style="margin-top:6px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;">展开剩余 ${tailCount} 条</button>`
+            : '';
+        qaHtml = `
+            <div class="detail-section">
+                <h3>认知问答对（${qa.length}）</h3>
+                <div id="qaList">${head}</div>
+                ${tailBtn}
+            </div>
+        `;
+        // 绑定一次性展开逻辑
+        setTimeout(() => {
+            const btn = document.getElementById('qaExpandBtn');
+            if (!btn) return;
+            btn.addEventListener('click', () => {
+                const list = document.getElementById('qaList');
+                const more = qa.slice(maxShow).map((item, idx) => {
+                    const level = item.level_zh || item.level || '—';
+                    const q = (item.question || '').toString();
+                    const a = (item.answer || '').toString();
+                    const seq = idx + maxShow + 1;
+                    return `
+                        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:6px 0;">
+                            <div style="font-weight:600;color:#374151;">${seq}. ${escapeHtml(level)}</div>
+                            <div style="color:#4b5563;margin-top:4px;">❓ ${escapeHtml(q)}</div>
+                            <div style="color:#111827;margin-top:2px;">✅ ${escapeHtml(a)}</div>
+                        </div>
+                    `;
+                }).join('');
+                if (list) list.insertAdjacentHTML('beforeend', more);
+                btn.remove();
+            });
+        }, 0);
+    }
+
     let html = `
         <div class="detail-section">
             <h3>节点详情</h3>
@@ -406,6 +859,7 @@ function showNodeDetail(node) {
                 <button onclick="editNode('${node.id}')">编辑节点</button>
             </div>
         </div>
+        ${qaHtml}
     `;
     detailContent.innerHTML = html;
 }
@@ -418,7 +872,7 @@ function showEdgeDetail(edge) {
             <h3>边详情</h3>
             <div class="detail-item">
                 <label>关系类型:</label>
-                <span>${escapeHtml(edge.type || '')}</span>
+                <span>${escapeHtml(edge.type || edge.label || '')}</span>
             </div>
             <div class="detail-item">
                 <label>描述:</label>
@@ -452,10 +906,84 @@ function editNode(nodeId) {
     document.getElementById('editNodeSubject').value = node.subject || '';
     document.getElementById('editNodePublisher').value = node.publisher || '';
     document.getElementById('editNodeStatus').value = node.status || -1;
+
+    // 渲染 QA 编辑区域
+    renderQaEditor(Array.isArray(node.bloom_qa_pairs) ? node.bloom_qa_pairs : []);
+    const addBtn = document.getElementById('qaAddBtn');
+    if (addBtn) {
+        addBtn.onclick = () => addQaRow();
+    }
     
     document.getElementById('nodeEditModal').style.display = 'flex';
 }
 
+// ===== QA 编辑辅助 =====
+function renderQaEditor(pairs) {
+    const wrap = document.getElementById('editNodeQA');
+    if (!wrap) return;
+    const safePairs = Array.isArray(pairs) ? pairs : [];
+    wrap.innerHTML = safePairs.map((p, idx) => qaRowTemplate(p, idx)).join('');
+}
+
+function qaRowTemplate(p = {}, idx = 0) {
+    const level = (p.level_zh || p.level || '').toString();
+    const q = (p.question || '').toString();
+    const a = (p.answer || '').toString();
+    return `
+    <div class="qa-row" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:6px 0;">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+            <label style="min-width:56px;color:#374151;">等级</label>
+            <input type="text" class="qa-level" value="${escapeHtml(level)}" placeholder="如：记忆/理解/Apply…" style="flex:1;">
+            <button type="button" class="qa-del-btn" title="删除" style="padding:4px 8px;border:1px solid #ef4444;background:#fff;color:#ef4444;border-radius:6px;cursor:pointer;">删除</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
+            <label style="min-width:56px;color:#374151;">问题</label>
+            <textarea class="qa-question" rows="2" style="flex:1;">${escapeHtml(q)}</textarea>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-start;">
+            <label style="min-width:56px;color:#374151;">答案</label>
+            <textarea class="qa-answer" rows="2" style="flex:1;">${escapeHtml(a)}</textarea>
+        </div>
+    </div>
+    `;
+}
+
+function addQaRow() {
+    const wrap = document.getElementById('editNodeQA');
+    if (!wrap) return;
+    wrap.insertAdjacentHTML('beforeend', qaRowTemplate({}, 0));
+    bindQaDeleteButtons();
+}
+
+function bindQaDeleteButtons() {
+    const wrap = document.getElementById('editNodeQA');
+    if (!wrap) return;
+    wrap.querySelectorAll('.qa-del-btn').forEach(btn => {
+        if (btn.dataset.bound === '1') return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', () => {
+            const row = btn.closest('.qa-row');
+            if (row) row.remove();
+        });
+    });
+}
+
+function collectQaFromEditor() {
+    const wrap = document.getElementById('editNodeQA');
+    if (!wrap) return [];
+    const rows = Array.from(wrap.querySelectorAll('.qa-row'));
+    const result = rows.map(row => {
+        const level = (row.querySelector('.qa-level')?.value || '').trim();
+        const question = (row.querySelector('.qa-question')?.value || '').trim();
+        const answer = (row.querySelector('.qa-answer')?.value || '').trim();
+        const obj = {};
+        if (level) obj.level_zh = level;
+        if (question) obj.question = question;
+        if (answer) obj.answer = answer;
+        return obj;
+    }).filter(o => Object.keys(o).length > 0);
+    return result;
+}
 // 关闭节点编辑模态框
 function closeNodeEditModal() {
     document.getElementById('nodeEditModal').style.display = 'none';
@@ -464,6 +992,7 @@ function closeNodeEditModal() {
 // 保存节点编辑
 async function saveNodeEdit() {
     const uuid = document.getElementById('editNodeUuid').value;
+    const qaPairs = collectQaFromEditor();
     const nodeData = {
         uuid: uuid,
         node_name: document.getElementById('editNodeName').value,
@@ -471,7 +1000,10 @@ async function saveNodeEdit() {
         grade: document.getElementById('editNodeGrade').value,
         subject: document.getElementById('editNodeSubject').value,
         publisher: document.getElementById('editNodePublisher').value,
-        status: parseInt(document.getElementById('editNodeStatus').value) || -1
+        status: parseInt(document.getElementById('editNodeStatus').value) || -1,
+        student: document.getElementById('kgStudentSelect')?.value || '',
+        stage: document.getElementById('kgStageSelect')?.value || '',
+        bloom_qa_pairs: qaPairs
     };
     
     try {
@@ -545,7 +1077,9 @@ async function saveEdgeEdit() {
         start_uuid: document.getElementById('editEdgeStartUuid').value,
         end_uuid: document.getElementById('editEdgeEndUuid').value,
         type: document.getElementById('editEdgeType').value,
-        description: document.getElementById('editEdgeDescription').value
+        description: document.getElementById('editEdgeDescription').value,
+        student: document.getElementById('kgStudentSelect')?.value || '',
+        stage: document.getElementById('kgStageSelect')?.value || ''
     };
     
     try {
@@ -566,21 +1100,26 @@ async function saveEdgeEdit() {
             return;
         }
         
-        // 更新本地数据
-        const edgeIndex = edgesData.findIndex(e => 
-            e.start_uuid === edgeData.start_uuid && e.end_uuid === edgeData.end_uuid
-        );
+        // 更新本地数据：优先通过 id 匹配
+        let edgeIndex = -1;
+        if (currentSelectedEdge && currentSelectedEdge.id) {
+            edgeIndex = edgesData.findIndex(e => e.id === currentSelectedEdge.id);
+        }
+        if (edgeIndex === -1) {
+            edgeIndex = edgesData.findIndex(e => e.start_uuid === edgeData.start_uuid && e.end_uuid === edgeData.end_uuid);
+        }
         if (edgeIndex !== -1) {
             edgesData[edgeIndex] = { ...edgesData[edgeIndex], ...edgeData };
-            
-            // 更新网络图
-            const visEdges = network.body.data.edges;
-            const edgeId = edgesData[edgeIndex].id;
-            const visEdge = visEdges.get(edgeId);
-            if (visEdge) {
-                visEdge.label = edgeData.type;
-                visEdge.title = edgeData.description || edgeData.type;
-                visEdges.update(visEdge);
+        }
+        // 更新网络图
+        const visEdges = network.body.data.edges;
+        if (currentSelectedEdge && currentSelectedEdge.id && visEdges.get(currentSelectedEdge.id)) {
+            const visEdge = visEdges.get(currentSelectedEdge.id);
+            visEdges.update({ id: visEdge.id, label: edgeData.type, title: edgeData.description || edgeData.type });
+        } else if (edgeIndex !== -1) {
+            const eid = edgesData[edgeIndex].id;
+            if (eid && visEdges.get(eid)) {
+                visEdges.update({ id: eid, label: edgeData.type, title: edgeData.description || edgeData.type });
             }
         }
         
@@ -660,6 +1199,17 @@ function resetZoom() {
                 easingFunction: 'easeInOutQuad'
             }
         });
+    }
+}
+
+// 返回上一级：恢复为按年级聚合视图
+function goBackOneLevel() {
+    if (!network) return;
+    try {
+        applyClusterMode('grade_status');
+        updateStatus('已返回年级聚合视图', 'success');
+    } catch (e) {
+        console.warn('goBackOneLevel error:', e);
     }
 }
 

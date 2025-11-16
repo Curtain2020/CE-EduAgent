@@ -120,10 +120,33 @@ function initializeStudentSelector() {
         positivityWrapper.appendChild(positivityLabel);
         positivityWrapper.appendChild(positivitySlider);
 
+        // per-student import/export buttons and status
+        const graphOps = document.createElement('div');
+        graphOps.className = 'student-graph-ops';
+        const btnImport = document.createElement('button');
+        btnImport.textContent = '导入最新图谱';
+        btnImport.className = 'btn-import';
+        btnImport.addEventListener('click', async () => {
+            await importLatestGraphsForStudents([student.name]);
+        });
+        const btnExport = document.createElement('button');
+        btnExport.textContent = '导出图谱';
+        btnExport.className = 'btn-export';
+        btnExport.addEventListener('click', async () => {
+            await exportGraphsForStudents([student.name]);
+        });
+        const status = document.createElement('span');
+        status.className = 'student-graph-status';
+        status.textContent = '';
+        graphOps.appendChild(btnImport);
+        graphOps.appendChild(btnExport);
+        graphOps.appendChild(status);
+
         itemEl.appendChild(nameLabel);
         itemEl.appendChild(longTermLabel);
         itemEl.appendChild(knowledgeLabel);
         itemEl.appendChild(positivityWrapper);
+        itemEl.appendChild(graphOps);
         listEl.appendChild(itemEl);
     });
 
@@ -469,9 +492,12 @@ async function sendMessage() {
         }
 
         const responses = Array.isArray(data.responses) ? data.responses : [];
-        if (responses.length === 0 && data.response) {
-            addMessage('assistant', data.response, {
-                senderName: activeStudents[0] || '学生'
+        const systemText = data.message || data.response;
+        if (responses.length === 0 && systemText) {
+            // 无学生发言时，仅展示课堂助手（避免与下面 data.message 再次渲染重复）
+            addMessage('system', systemText, {
+                senderName: '课堂助手',
+                studentsState: Array.isArray(data.students_state) ? data.students_state : []
             });
         } else {
             responses.forEach((item) => {
@@ -491,7 +517,8 @@ async function sendMessage() {
             });
         }
 
-        if (data.message) {
+        // 仅在已有学生响应时，再追加课堂助手的课堂状态信息，避免重复渲染
+        if (data.message && responses.length > 0) {
             addMessage('system', data.message, {
                 senderName: '课堂助手',
                 studentsState: Array.isArray(data.students_state) ? data.students_state : []
@@ -544,7 +571,7 @@ function addMessage(type, content, options = {}) {
     const messageContent = document.createElement('div');
     messageContent.className = 'message-content';
     
-    const headerTitle = senderName || (type === 'user' ? '老师' : '学生');
+    const headerTitle = senderName || (type === 'user' ? '老师' : (type === 'system' ? '课堂助手' : '学生'));
 
     if (type === 'user') {
         messageContent.innerHTML = `
@@ -753,6 +780,146 @@ async function updateStudentPositivity(studentName, value) {
         console.error('更新积极性失败:', error);
         updateStatus(`${studentName}积极性更新失败: ${error.message}`, 'error');
     }
+}
+
+// ===== 图谱导入/导出（支持分学生） =====
+async function importLatestGraphs() {
+    const btn = document.getElementById('kgImportBtn');
+    const status = document.getElementById('kgStatus');
+    if (!btn || !status) return;
+    btn.disabled = true; status.textContent = '正在导入最新图谱…';
+    try {
+        // 优先使用已初始化学生；否则使用当前选中的学生
+        const studentNames = (activeStudents && activeStudents.length > 0)
+            ? activeStudents
+            : getSelectedStudentConfigs().map((c) => c.student_name);
+        if (!studentNames.length) throw new Error('请先在左侧选择并初始化学生');
+        const resp = await fetch('/api/graph/import_latest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_names: studentNames })
+        });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || '导入失败');
+        const msg = (data.results || []).map((r) => `${r.student}${r.stage ? `(${r.stage})` : ''}`).join('、');
+        status.textContent = `导入完成：${msg || '—'}`;
+        updateStatus('已导入最新图谱', 'success');
+    } catch (e) {
+        status.textContent = `导入失败：${e.message}`;
+        updateStatus(status.textContent, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function exportGraphs() {
+    const btn = document.getElementById('kgExportBtn');
+    const status = document.getElementById('kgStatus');
+    if (!btn || !status) return;
+    btn.disabled = true; status.textContent = '正在导出本课图谱…';
+    try {
+        const studentNames = (activeStudents && activeStudents.length > 0)
+            ? activeStudents
+            : getSelectedStudentConfigs().map((c) => c.student_name);
+        if (!studentNames.length) throw new Error('请先在左侧选择并初始化学生');
+        const resp = await fetch('/api/graph/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_names: studentNames })
+        });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || '导出失败');
+        const msg = (data.results || []).map((r) => `${r.student}${r.stage ? `(${r.stage})` : ''}`).join('、');
+        status.textContent = `导出完成：${msg || '—'}`;
+        updateStatus('已导出并更新 index.json', 'success');
+    } catch (e) {
+        status.textContent = `导出失败：${e.message}`;
+        updateStatus(status.textContent, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// 批量/单个公共实现：逐学生更新UI状态
+async function importLatestGraphsForStudents(studentNames = []) {
+    if (!Array.isArray(studentNames) || studentNames.length === 0) return;
+    const listEl = document.getElementById('studentList');
+    const btnGlobal = document.getElementById('kgImportBtn'); // 兼容旧按钮，如不存在忽略
+    if (btnGlobal) btnGlobal.disabled = true;
+    try {
+        // 置为进行中
+        studentNames.forEach((name) => setStudentGraphStatus(name, '导入中…'));
+        const resp = await fetch('/api/graph/import_latest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_names: studentNames })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            studentNames.forEach((name) => setStudentGraphStatus(name, `导入失败：${data.error || '未知错误'}`));
+            return;
+        }
+        const resultMap = {};
+        (data.results || []).forEach(r => { resultMap[r.student] = r; });
+        studentNames.forEach((name) => {
+            const r = resultMap[name];
+            if (r && r.success) {
+                setStudentGraphStatus(name, `导入完成：${r.stage || '—'}`, true);
+            } else {
+                setStudentGraphStatus(name, `导入失败：${r?.error || '未知错误'}`, false);
+            }
+        });
+    } catch (e) {
+        studentNames.forEach((name) => setStudentGraphStatus(name, `导入失败：${e.message}`));
+    } finally {
+        if (btnGlobal) btnGlobal.disabled = false;
+    }
+}
+
+async function exportGraphsForStudents(studentNames = []) {
+    if (!Array.isArray(studentNames) || studentNames.length === 0) return;
+    const btnGlobal = document.getElementById('kgExportBtn'); // 兼容旧按钮
+    if (btnGlobal) btnGlobal.disabled = true;
+    try {
+        studentNames.forEach((name) => setStudentGraphStatus(name, '导出中…'));
+        const resp = await fetch('/api/graph/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_names: studentNames })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            studentNames.forEach((name) => setStudentGraphStatus(name, `导出失败：${data.error || '未知错误'}`));
+            return;
+        }
+        const resultMap = {};
+        (data.results || []).forEach(r => { resultMap[r.student] = r; });
+        studentNames.forEach((name) => {
+            const r = resultMap[name];
+            if (r && r.success) {
+                setStudentGraphStatus(name, `导出完成：${r.stage || '—'}`, true);
+            } else {
+                setStudentGraphStatus(name, `导出失败：${r?.error || '未知错误'}`, false);
+            }
+        });
+    } catch (e) {
+        studentNames.forEach((name) => setStudentGraphStatus(name, `导出失败：${e.message}`));
+    } finally {
+        if (btnGlobal) btnGlobal.disabled = false;
+    }
+}
+
+function setStudentGraphStatus(studentName, text, ok = null) {
+    const listEl = document.getElementById('studentList');
+    if (!listEl) return;
+    const itemEl = listEl.querySelector(`.student-item[data-student="${safeCssEscape(studentName)}"]`);
+    if (!itemEl) return;
+    const statusEl = itemEl.querySelector('.student-graph-status');
+    if (!statusEl) return;
+    statusEl.textContent = text || '';
+    statusEl.style.marginLeft = '8px';
+    statusEl.style.fontSize = '12px';
+    statusEl.style.color = ok === true ? '#16a34a' : ok === false ? '#dc2626' : '#666';
 }
 
 // 更新状态显示

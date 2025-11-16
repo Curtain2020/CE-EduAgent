@@ -14,19 +14,20 @@
         <div class="control-panel">
             <h1>知识图谱可视化与编辑系统</h1>
             <div class="control-buttons">
-                <button id="loadBtn" onclick="loadKnowledgeGraph()">加载图谱</button>
-                <button id="saveBtn" onclick="saveKnowledgeGraph()" disabled>保存图谱</button>
-                <button id="resetViewBtn" onclick="resetView()" disabled>重置视图</button>
-                <button id="fitViewBtn" onclick="fitView()" disabled>适应窗口</button>
-                <div class="cluster-controls">
-                    <label>聚合方式:</label>
-                    <select id="clusterMode" onchange="changeClusterMode()">
-                        <option value="none">不聚合</option>
-                        <option value="grade_status">按年级聚合（年级内按状态分组）</option>
-                    </select>
-                    <button id="expandAllBtn" onclick="expandAllClusters()" disabled style="display: none;">展开全部</button>
-                    <button id="collapseAllBtn" onclick="collapseAllClusters()" disabled style="display: none;">折叠全部</button>
+                <div class="kg-version-bar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <label>学生:</label>
+                    <select id="kgStudentSelect" style="min-width:120px;"></select>
+                    <label>版本:</label>
+                    <select id="kgStageSelect" style="min-width:160px;"></select>
+                    <button onclick="loadSelectedGraph()">加载图谱</button>
+                    <button onclick="setSelectedAsCurrent()">设为当前</button>
+                    <label>对比版本:</label>
+                    <select id="kgCompareStageSelect" style="min-width:160px;"></select>
+                    <button onclick="compareTwoStages()">生成对比摘要</button>
+                    <span id="kgMetaInfo" style="color:#666;"></span>
                 </div>
+                <div id="kgDiffSummary" class="kg-diff-summary" style="margin-top:8px;display:none;"></div>
+                <!-- 聚合方式固定为按年级聚合，无需选择 -->
                 <div class="status-info">
                     <span id="statusText">未加载</span>
                     <span id="nodeCount" class="count-badge">节点: 0</span>
@@ -48,7 +49,7 @@
                 <div class="zoom-controls">
                     <button id="zoomInBtn" onclick="zoomIn()" title="放大">+</button>
                     <button id="zoomOutBtn" onclick="zoomOut()" title="缩小">−</button>
-                    <button id="zoomFitBtn" onclick="fitView()" title="适应窗口">⌂</button>
+                    <button id="zoomFitBtn" onclick="goBackOneLevel()" title="返回上一级">⌂</button>
                     <button id="zoomResetBtn" onclick="resetZoom()" title="重置缩放">↺</button>
                 </div>
                 
@@ -99,6 +100,13 @@
                     <div class="form-group">
                         <label>状态:</label>
                         <input type="number" id="editNodeStatus" value="-1">
+                    </div>
+                    <div class="form-group">
+                        <label>认知问答对（可编辑）:</label>
+                        <div id="editNodeQA" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;max-height:220px;overflow:auto;">
+                            <!-- 由脚本渲染 QA 行 -->
+                        </div>
+                        <button type="button" id="qaAddBtn" style="margin-top:8px;">新增一条 QA</button>
                     </div>
                     <div class="form-actions">
                         <button type="button" onclick="saveNodeEdit()">保存</button>

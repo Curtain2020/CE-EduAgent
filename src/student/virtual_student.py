@@ -123,10 +123,28 @@ class VirtualStudent:
         
         # 知识库工具（如果启用）
         if self.enable_knowledge_base:
-            knowledge_tools = create_knowledge_tools()
+            knowledge_tools = create_knowledge_tools(student_label_en=self._get_student_label_en())
             tools.extend(knowledge_tools)
         
         return tools
+    
+    def _get_student_label_en(self) -> str:
+        """获取学生英文标签名，用于 Neo4j 标签后缀"""
+        # 若 student_name 已为英文则直接返回；否则使用自定义映射
+        name = self.student_name or ""
+        # 简单判断：只含英文/数字/下划线时视为英文
+        import re
+        if re.fullmatch(r"[A-Za-z0-9_]+", name or ""):
+            return name
+        mapping = {
+            "崔展豪": "Cuizhanhao",
+            "包梓群": "Baoziqun",
+            "李昌龙": "Lichanglong",
+            "丽娃": "Liwa",
+            "萧华诗": "Xiaohuashi",
+            "张晓丹": "Zhangxidan",
+        }
+        return mapping.get(name, "UnknownStudent")
     
     def get_tool_definitions(self) -> Optional[List]:
         """获取工具定义列表（用于Qwen API）
