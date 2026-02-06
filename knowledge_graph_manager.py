@@ -339,23 +339,41 @@ class KnowledgeGraphManager:
             session.run(f"MATCH (n:`{label}`) DETACH DELETE n")
 
     def _create_nodes(self, label: str, nodes: List[Dict]):
+        print(f"开始创建节点，标签: {label}, 节点数: {len(nodes)}")
+        node_count = 0
         with self.driver.session() as session:
             for node in nodes:
-                properties = node["properties"]
-                bloom_qa_pairs_json = json.dumps(properties.get("bloom_qa_pairs", []), ensure_ascii=False)
-                properties["bloom_qa_pairs"] = bloom_qa_pairs_json
-                # 统一规范 status 为三维向量
-                properties["status"] = self._ensure_status_vector(properties.get("status"))
-                session.run(f"""
-                    MERGE (n:`{label}` {{uuid: $uuid}})
-                    SET n.node_name = $node_name,
-                        n.description = $description,
-                        n.grade = $grade,
-                        n.subject = $subject,
-                        n.publisher = $publisher,
-                        n.status = $status,
-                        n.bloom_qa_pairs = $bloom_qa_pairs
-                """, **properties)
+                try:
+                    properties = node["properties"]
+                    
+                    # 检查必要的字段
+                    if not properties.get("uuid"):
+                        print(f"跳过无效节点: 缺少uuid")
+                        continue
+                    
+                    bloom_qa_pairs_json = json.dumps(properties.get("bloom_qa_pairs", []), ensure_ascii=False)
+                    properties["bloom_qa_pairs"] = bloom_qa_pairs_json
+                    # 统一规范 status 为三维向量
+                    properties["status"] = self._ensure_status_vector(properties.get("status"))
+                    
+                    session.run(f"""
+                        MERGE (n:`{label}` {{uuid: $uuid}})
+                        SET n.node_name = $node_name,
+                            n.description = $description,
+                            n.grade = $grade,
+                            n.subject = $subject,
+                            n.publisher = $publisher,
+                            n.status = $status,
+                            n.bloom_qa_pairs = $bloom_qa_pairs
+                    """, **properties)
+                    
+                    node_count += 1
+                    
+                except Exception as e:
+                    print(f"创建节点失败: {e}")
+                    continue
+        
+        print(f"节点创建完成，共创建 {node_count} 个节点")
 
     def _create_relationships(self, label: str, edges: List[Dict]):
         with self.driver.session() as session:

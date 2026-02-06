@@ -1,0 +1,156 @@
+{
+  "test_summary": {
+    "test_name": "内存测试",
+    "test_duration": 0.39,
+    "total_conversations": 300
+  },
+  "memory_metrics": [
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 0
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 74,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.2,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 75,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.5,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 75,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.5,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 75,
+      "system_memory_used": 5823,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 22.5,
+      "conversation_count": 300,
+      "buffer_size": 10
+    },
+    {
+      "timestamp": "2026-01-07 17:06:25",
+      "process_memory": 81,
+      "system_memory_used": 5768,
+      "system_memory_total": 16384,
+      "zep_memory_usage": 146.484375,
+      "neo4j_memory": 24.3,
+      "conversation_count": 300,
+      "buffer_size": 10
+    }
+  ],
+  "memory_analysis": {
+    "average_process_memory": 74,
+    "average_zep_memory": 146.484375,
+    "average_neo4j_memory": 22.45,
+    "process_memory_growth": 7,
+    "zep_memory_growth": 0.0,
+    "neo4j_memory_growth": 2.1000000000000014,
+    "total_conversations": 300
+  },
+  "neo4j_index_performance": null,
+  "neo4j_retrieval_performance": {
+    "total_queries": 200,
+    "successful_queries": 200,
+    "error_rate": 0.0,
+    "average_retrieval_time": 29.44728136062622,
+    "min_retrieval_time": 0.8168220520019531,
+    "max_retrieval_time": 147.99094200134277,
+    "p95_retrieval_time": 95.55196762084961,
+    "p99_retrieval_time": 133.82291793823242,
+    "average_memory_used": 80.77
+  },
+  "recommendations": [
+    "监控短期记忆缓冲区的大小，确保不超过预设容量",
+    "考虑实现更智能的缓冲策略，如基于优先级的消息保留",
+    "定期清理不再需要的对话历史，释放长期记忆空间",
+    "优化对话数据的存储格式，减少内存占用"
+  ]
+}

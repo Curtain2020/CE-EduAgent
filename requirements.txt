@@ -1,9 +1,8 @@
-zep-cloud>=3.0.0
+zep-cloud>=1.0.4
 openai>=1.0.0
 python-dotenv>=1.0.0
 rich>=13.0.0
 requests>=2.31.0
-uuid
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0

@@ -82,11 +82,24 @@ class ShortTermMemoryManager:
             thread_id: 线程ID
         """
         try:
-            messages = [
-                Message(role="user", content=conversation["user_message"], name="老师"),
-                Message(role="assistant", content=conversation["student_response"], 
-                       name=conversation["student_name"])
-            ]
+            # 兼容真实和模拟的Message类
+            messages = []
+            try:
+                from zep_cloud import Message as ZepMessage
+                messages = [
+                    ZepMessage(role="user", content=conversation["user_message"], name="老师"),
+                    ZepMessage(role="assistant", content=conversation["student_response"], 
+                              name=conversation["student_name"])
+                ]
+            except ImportError:
+                # 如果是模拟环境，使用普通字典
+                messages = [
+                    {"role": "user", "content": conversation["user_message"], "name": "老师"},
+                    {"role": "assistant", "content": conversation["student_response"], 
+                     "name": conversation["student_name"]}
+                ]
+            
+            # 调用长期记忆服务
             await self.zep_client.thread.add_messages(
                 thread_id=thread_id,
                 messages=messages

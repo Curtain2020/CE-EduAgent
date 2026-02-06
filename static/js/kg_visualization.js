@@ -332,9 +332,14 @@ async function initVersionSelectors() {
         Object.keys(kgIndex).forEach(cn => {
             const opt = document.createElement('option');
             opt.value = cn; opt.textContent = cn;
+            // 默认选择崔展豪
+            if (cn === '崔展豪') {
+                opt.selected = true;
+            }
             stuSel.appendChild(opt);
         });
-        currentStudentCN = stuSel.value || Object.keys(kgIndex)[0] || null;
+        // 默认选择崔展豪作为学生
+        currentStudentCN = '崔展豪' in kgIndex ? '崔展豪' : (stuSel.value || Object.keys(kgIndex)[0] || null);
         fillStagesFor(currentStudentCN);
 
         stuSel.addEventListener('change', () => {
@@ -800,6 +805,173 @@ async function saveKnowledgeGraph() {
     } catch (error) {
         updateStatus('保存失败: ' + error.message, 'error');
         console.error('保存知识图谱错误:', error);
+    }
+}
+
+// 上传到图数据库
+async function uploadToGraphDB() {
+    if (!confirm('确定要将当前图谱上传到图数据库吗？')) {
+        return;
+    }
+    
+    try {
+        updateStatus('正在上传到图数据库...', 'loading');
+        
+        const response = await fetch('/api/kg/upload', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                nodes: nodesData,
+                edges: edgesData,
+                student: currentStudentCN
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            updateStatus('上传失败: ' + data.error, 'error');
+            return;
+        }
+        
+        updateStatus(`上传成功: ${data.nodes_count} 个节点, ${data.edges_count} 条边已上传到图数据库`, 'success');
+        
+    } catch (error) {
+        updateStatus('上传失败: ' + error.message, 'error');
+        console.error('上传到图数据库错误:', error);
+    }
+}
+
+// 从图数据库拉取
+async function pullFromGraphDB() {
+    if (!currentStudentCN) {
+        updateStatus('请先选择学生', 'error');
+        return;
+    }
+    
+    if (!confirm(`确定要从图数据库拉取 ${currentStudentCN} 的最新图谱吗？这将创建一个新版本并自动加载。`)) {
+        return;
+    }
+    
+    try {
+        updateStatus('正在从图数据库拉取图谱...', 'loading');
+        
+        const response = await fetch('/api/kg/pull', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                student: currentStudentCN
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            updateStatus('拉取失败: ' + data.error, 'error');
+            return;
+        }
+        
+        // 重新加载版本列表
+        await initVersionSelectors();
+        fillStagesFor(currentStudentCN);
+        
+        // 保存原始数据
+        allNodesData = data.nodes || [];
+        allEdgesData = data.edges || [];
+        nodesData = allNodesData;
+        edgesData = allEdgesData;
+        
+        // 确保网络实例已初始化
+        initNetworkIfNeeded();
+        
+        // 转换为vis.js格式
+        const visNodes = new vis.DataSet(nodesData.map(node => ({
+            id: node.id,
+            label: node.label,
+            title: node.description || node.label,
+            uuid: node.uuid,
+            color: getNodeColor(node),
+            font: { size: 14 },
+            shape: 'box',
+            margin: 10
+        })));
+        
+        const visEdges = new vis.DataSet(edgesData.map(edge => ({
+            id: edge.id,
+            from: edge.from,
+            to: edge.to,
+            label: edge.label,
+            title: edge.description || edge.label,
+            arrows: 'to',
+            color: getEdgeColor(edge.type),
+            font: { size: 12, align: 'middle' }
+        })));
+        
+        // 更新网络数据
+        network.setData({
+            nodes: visNodes,
+            edges: visEdges
+        });
+        
+        // 应用聚合
+        applyClusterMode('grade_status');
+        
+        // 提示用户
+        updateStatus(`拉取成功: 已创建并加载新版本 ${data.new_version}，包含 ${data.nodes_count} 个节点和 ${data.edges_count} 条边。`, 'success');
+        updateCounts(data.nodes_count, data.edges_count);
+        
+    } catch (error) {
+        updateStatus('拉取失败: ' + error.message, 'error');
+        console.error('从图数据库拉取错误:', error);
+    }
+}
+
+// 删除当前版本
+async function deleteCurrentVersion() {
+    if (!currentStudentCN || !currentStage) {
+        updateStatus('请先选择学生和版本', 'error');
+        return;
+    }
+    
+    if (!confirm(`确定要删除 ${currentStudentCN} 的当前版本 ${currentStage} 吗？此操作不可恢复。`)) {
+        return;
+    }
+    
+    try {
+        updateStatus('正在删除当前版本...', 'loading');
+        
+        const response = await fetch('/api/kg/delete_version', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                student: currentStudentCN,
+                stage: currentStage
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            updateStatus('删除失败: ' + data.error, 'error');
+            return;
+        }
+        
+        // 重新加载版本列表
+        await initVersionSelectors();
+        fillStagesFor(currentStudentCN);
+        
+        // 提示用户
+        updateStatus(`删除成功: 已删除版本 ${currentStage}`, 'success');
+        
+    } catch (error) {
+        updateStatus('删除失败: ' + error.message, 'error');
+        console.error('删除版本错误:', error);
     }
 }
 

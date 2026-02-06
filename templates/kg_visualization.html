@@ -28,6 +28,12 @@
                 </div>
                 <div id="kgDiffSummary" class="kg-diff-summary" style="margin-top:8px;display:none;"></div>
                 <!-- 聚合方式固定为按年级聚合，无需选择 -->
+                <div class="control-buttons-row">
+                    <button onclick="saveKnowledgeGraph()">保存图谱</button>
+                    <button onclick="uploadToGraphDB()">上传到图数据库</button>
+                    <button onclick="pullFromGraphDB()">从图数据库拉取</button>
+                    <button onclick="deleteCurrentVersion()">删除当前版本</button>
+                </div>
                 <div class="status-info">
                     <span id="statusText">未加载</span>
                     <span id="nodeCount" class="count-badge">节点: 0</span>

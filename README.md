@@ -146,128 +146,157 @@
 
 ```mermaid
 graph TB
-    %% 用户输入层
-    Teacher[👨‍🏫 教师/用户输入]
-    Student[👨‍🎓 学生输入]
+    %% 阶段1: 消息处理与意图识别阶段（流程 1-3）
+    subgraph Stage1["📥 阶段1: 消息处理与意图识别阶段（流程 1-3）"]
+        direction TB
+        Teacher[👨‍🏫 教师/用户输入]
+        Student[👨‍🎓 学生输入]
+        Queue[📬 消息队列<br/>Message Queue]
+        Intent[🧠 意图识别模块<br/>Intent Recognition]
+        
+        Teacher -->|1. 输入消息| Queue
+        Student -->|1. 输入消息| Queue
+        Queue -->|2. 消息传递| Intent
+    end
     
-    %% 消息处理层
-    Queue[📬 消息队列<br/>Message Queue]
+    %% 阶段2: 核心处理与上下文检索阶段（流程 3-6, 13）
+    subgraph Stage2["🧠 阶段2: 核心处理与上下文检索阶段（流程 3-6, 13）"]
+        direction TB
+        AI[🤖 AI 处理单元<br/>VirtualStudent + Qwen API]
+        LongMem[💾 长期记忆模块<br/>Zep Cloud]
+        Tools[🛠️ 工具库<br/>Tool Library]
+        ShortMem[📝 公共短期记忆模块<br/>Short-term Memory]
+        
+        AI -->|4a. 检索记忆| LongMem
+        AI -->|4b. 调用工具| Tools
+        LongMem -->|5. 返回记忆| AI
+        Tools -->|6. 工具结果| AI
+        LongMem <-->|10. 双向交互| Tools
+        ShortMem -->|13. 提供上下文| AI
+    end
     
-    %% 意图识别层
-    Intent[🧠 意图识别模块<br/>Intent Recognition]
+    %% 阶段3: "知识-认知"熔合阶段（流程 7-9）
+    subgraph Stage3["🔗 阶段3: 知识-认知熔合阶段（流程 7-9）"]
+        direction TB
+        KG[📊 知识图谱<br/>Neo4j Knowledge Graph]
+        
+        Tools -.->|7. 查询知识| KG
+        Tools -.->|8. 更新知识| KG
+        KG -.->|9. 返回结果| Tools
+    end
     
-    %% 核心处理层
-    AI[🤖 AI 处理单元<br/>VirtualStudent + Qwen API]
+    %% 阶段4: 行为输出与记忆更新阶段（流程 11-13）
+    subgraph Stage4["📤 阶段4: 行为输出与记忆更新阶段（流程 11-13）"]
+        direction TB
+        VR[🎭 数字人驱动接口<br/>VR/状态更新]
+        Summary[📋 消息总结模块<br/>Message Summary]
+        
+        AI -.->|11a. 驱动数字人| VR
+        AI -.->|11b. 更新记忆| ShortMem
+        AI -.->|11c. 生成总结| Summary
+        Summary -->|12. 更新短期记忆| ShortMem
+    end
     
-    %% 记忆和工具层
-    LongMem[💾 长期记忆模块<br/>Zep Cloud]
-    Tools[🛠️ 工具库<br/>Tool Library]
-    ShortMem[📝 公共短期记忆模块<br/>Short-term Memory]
-    
-    %% 知识图谱层
-    KG[📊 知识图谱<br/>Neo4j Knowledge Graph]
-    
-    %% 输出层
-    VR[🎭 数字人驱动接口<br/>VR/状态更新]
-    Summary[📋 消息总结模块<br/>Message Summary]
-    
-    %% 输入流程
-    Teacher -->|1. 输入消息| Queue
-    Student -->|1. 输入消息| Queue
-    Queue -->|2. 消息传递| Intent
-    
-    %% 意图识别流程
+    %% 跨阶段的连接
     Intent -->|3. 识别意图<br/>question/call/continue| AI
     
-    %% AI 处理流程
-    AI -->|4a. 检索记忆| LongMem
-    AI -->|4b. 调用工具| Tools
-    LongMem -->|5. 返回记忆| AI
-    Tools -->|6. 工具结果| AI
+    %% 样式定义 - 四个阶段使用不同颜色
+    classDef stage1Style fill:#e3f2fd,stroke:#1976d2,stroke-width:3px
+    classDef stage2Style fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px
+    classDef stage3Style fill:#fff3e0,stroke:#f57c00,stroke-width:3px
+    classDef stage4Style fill:#e8f5e9,stroke:#388e3c,stroke-width:3px
     
-    %% 工具库交互
-    Tools -->|7. 查询知识| KG
-    Tools -->|8. 更新知识| KG
-    KG -->|9. 返回结果| Tools
-    
-    %% 长期记忆与工具交互
-    LongMem <-->|10. 双向交互| Tools
-    
-    %% 输出流程
-    AI -->|11a. 驱动数字人| VR
-    AI -->|11b. 更新记忆| ShortMem
-    AI -->|11c. 生成总结| Summary
-    
-    %% 总结流程
-    Summary -->|12. 更新短期记忆| ShortMem
-    ShortMem -->|13. 提供上下文| AI
-    
-    %% 样式定义
-    classDef inputStyle fill:#e1f5ff,stroke:#01579b,stroke-width:2px
-    classDef processStyle fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef memoryStyle fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
-    classDef toolStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef outputStyle fill:#fce4ec,stroke:#880e4f,stroke-width:2px
-    
-    class Teacher,Student inputStyle
-    class Queue,Intent,AI processStyle
-    class LongMem,ShortMem memoryStyle
-    class Tools,KG toolStyle
-    class VR,Summary outputStyle
+    class Stage1 stage1Style
+    class Stage2 stage2Style
+    class Stage3 stage3Style
+    class Stage4 stage4Style
 ```
 
 ### 流程说明
 
-#### 1. 输入阶段
+#### 📥 阶段1: 消息处理与意图识别阶段（流程 1-3）
+
+**功能**：接收用户输入并识别意图
+
 - **教师/用户输入**：教师通过 Web 界面发送消息（文本或语音）
 - **学生输入**：虚拟学生接收输入并准备处理
-
-#### 2. 消息处理阶段
-- **消息队列**：接收并缓冲所有输入消息
+- **消息队列**：接收并缓冲所有输入消息，确保消息有序处理
 - **意图识别模块**：分析消息内容，识别意图类型：
   - `question`：提问
   - `call`：点名
   - `continue`：继续讲解
   - `sit_down`：让学生坐下
 
-#### 3. AI 处理阶段（核心）
+**输出**：识别后的意图传递给 AI 处理单元
+
+---
+
+#### 🧠 阶段2: 核心处理与上下文检索阶段（流程 3-6, 13）
+
+**功能**：AI 智能处理，检索记忆和调用工具
+
 - **AI 处理单元**：`VirtualStudent` 类结合 Qwen API 进行智能处理
   - 根据意图和上下文决定处理策略
   - 动态调用工具和检索记忆
   - 生成合适的回复
-
-#### 4. 记忆和工具调用阶段
+  
 - **长期记忆模块**（Zep Cloud）：
   - 检索历史对话和事实
   - 提供上下文信息
-  - 与工具库双向交互
+  - 与工具库双向交互（流程 10）
   
 - **工具库**：
   - `recall_knowledge_vector_tool`：检索知识点和掌握向量
   - `update_knowledge_vector_tool`：更新知识点掌握状态
   - `search_memory_comprehensive`：综合记忆检索
   
+- **公共短期记忆模块**：
+  - 存储最近 10 条对话
+  - 为后续对话提供上下文（流程 13）
+  - 定期刷新到长期记忆
+
+**输出**：处理结果传递给知识图谱或输出模块
+
+---
+
+#### 🔗 阶段3: "知识-认知"熔合阶段（流程 7-9）
+
+**功能**：知识图谱与认知工具深度融合
+
 - **知识图谱**（Neo4j）：
   - 存储学生特定的知识图谱
   - 支持相似度搜索
-  - 管理三维掌握向量
+  - 管理三维掌握向量 `[m, u, c]`
+  
+- **工具库与知识图谱交互**：
+  - **流程 7**：工具库查询知识图谱，获取知识点信息
+  - **流程 8**：工具库更新知识图谱，记录学习进度
+  - **流程 9**：知识图谱返回查询结果，供 AI 处理单元使用
 
-#### 5. 输出阶段
+**特点**：将结构化的知识图谱与 AI 的认知能力相结合，实现个性化学习追踪
+
+---
+
+#### 📤 阶段4: 行为输出与记忆更新阶段（流程 11-13）
+
+**功能**：生成输出并更新记忆
+
 - **数字人驱动接口**：
   - 更新学生状态（动作、表情）
   - 发送 VR 事件（可选）
-  - 控制学生行为表现
+  - 控制学生行为表现（流程 11a）
   
 - **消息总结模块**：
   - 总结对话内容
   - 提取关键信息
-  - 更新短期记忆
+  - 生成对话摘要（流程 11c）
+  
+- **记忆更新**：
+  - **流程 11b**：AI 处理单元直接更新短期记忆
+  - **流程 12**：消息总结模块更新短期记忆
+  - **流程 13**：短期记忆为下一轮对话提供上下文
 
-#### 6. 记忆更新阶段
-- **公共短期记忆模块**：
-  - 存储最近 10 条对话
-  - 为后续对话提供上下文
-  - 定期刷新到长期记忆
+**输出**：学生回复、状态更新、记忆持久化
 
 ### 关键特性
 
@@ -836,7 +865,7 @@ fetch('/api/graph/export', {
 **症状**：连接失败、认证错误
 
 **解决方案**：
-- 检查 `.env` 文件中的 API 密钥是否正确
+   - 检查 `.env` 文件中的 API 密钥是否正确
 - 确认 API 密钥有足够的权限和配额
 - 检查网络连接和防火墙设置
 
